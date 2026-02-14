@@ -1,0 +1,97 @@
+{% extends 'base.html' %}
+
+{% block title %}Ürün Verisi Yükle - Akıllı Palet Yerleştirme{% endblock %}
+
+{% block content %}
+<div class="flex justify-center items-center min-h-[70vh]">
+    <div class="bg-white shadow-lg rounded-2xl p-10 w-full max-w-md">
+        <h2 class="text-2xl font-bold text-center text-gray-800 mb-6">Ürün Verisini Yükle</h2>
+        
+        <p class="text-gray-600 mb-6 text-center">
+            Lütfen ürün listesini JSON formatında yükleyin
+        </p>
+        
+        <form id="uploadForm" class="space-y-6">
+            {% csrf_token %}
+            <div class="flex flex-col space-y-2">
+                <label for="fileInput" class="block text-gray-700 font-medium">JSON Dosyası</label>
+                <input type="file" id="fileInput" name="file" accept=".json" 
+                       class="border border-gray-300 rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500">
+            </div>
+            
+            <div id="errorMessage" class="hidden bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded relative mb-4">
+                <span class="block sm:inline" id="errorText"></span>
+            </div>
+            
+            <button type="submit" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-6 rounded-xl transition-colors">
+                <i class="fas fa-upload mr-2"></i> Yükle
+            </button>
+        </form>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+    $(document).ready(function() {
+        $('#uploadForm').on('submit', function(e) {
+            e.preventDefault();
+            
+            const fileInput = $('#fileInput')[0];
+            if (fileInput.files.length === 0) {
+                showError('Lütfen bir dosya seçin.');
+                return;
+            }
+            
+            const file = fileInput.files[0];
+            if (!file.name.toLowerCase().endsWith('.json')) {
+                showError('Yalnızca JSON dosyaları kabul edilir.');
+                return;
+            }
+            
+            // Formu AJAX ile gönder
+            const formData = new FormData();
+            formData.append('file', file);
+            // CSRF token ekle
+            formData.append('csrfmiddlewaretoken', $('input[name="csrfmiddlewaretoken"]').val());
+            
+            $.ajax({
+                url: '{% url "palet_app:upload_result" %}',
+                type: 'POST',
+                data: formData,
+                processData: false,
+                contentType: false,
+                beforeSend: function() {
+                    $('button[type="submit"]').prop('disabled', true).html('<i class="fas fa-spinner fa-spin mr-2"></i> Yükleniyor...');
+                },
+                success: function(response) {
+                    if (response.success) {
+                        window.location.href = response.next_url;
+                    } else {
+                        showError(response.error);
+                    }
+                },
+                error: function(xhr) {
+                    try {
+                        const response = JSON.parse(xhr.responseText);
+                        showError(response.error || 'Bir hata oluştu.');
+                    } catch (e) {
+                        showError('Dosya yüklenirken bir hata oluştu.');
+                    }
+                },
+                complete: function() {
+                    $('button[type="submit"]').prop('disabled', false).html('<i class="fas fa-upload mr-2"></i> Yükle');
+                }
+            });
+        });
+        
+        function showError(message) {
+            $('#errorText').text(message);
+            $('#errorMessage').removeClass('hidden');
+            setTimeout(function() {
+                $('#errorMessage').addClass('hidden');
+            }, 5000);
+        }
+    });
+</script>
+{% endblock %} 

@@ -1,0 +1,162 @@
+{% extends 'base.html' %}
+
+{% block title %}İşleniyor - Akıllı Palet Yerleştirme{% endblock %}
+
+{% block content %}
+<div class="py-8 max-w-3xl mx-auto">
+    <div class="text-center mb-8">
+        <div class="inline-block animate-spin rounded-full h-16 w-16 border-t-4 border-b-4 border-blue-600 mb-4"></div>
+        <h2 class="text-2xl font-bold text-gray-800 mb-2">Optimizasyon çalışıyor, lütfen bekleyin...</h2>
+        <p id="progressText" class="text-gray-600">Veri işleniyor...</p>
+    </div>
+    
+    <div class="mb-6 bg-gray-200 rounded-full h-4 overflow-hidden">
+        <div id="progressBar" class="bg-blue-600 h-4 w-0 transition-all duration-500"></div>
+    </div>
+    
+    <div class="bg-gray-900 text-white font-mono text-sm p-4 rounded-xl shadow-inner h-64 overflow-auto">
+        <div id="logContainer" class="whitespace-pre-line"></div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+    $(document).ready(function() {
+        const logContainer = $('#logContainer');
+        const progressBar = $('#progressBar');
+        const progressText = $('#progressText');
+        
+        let completed = false;
+        let lastStepCount = 0;
+        let retryCount = 0;
+        let maxRetries = 3;
+        let timeoutId;
+        let requestInProgress = false;
+        
+        // İşlem durumunu kontrol et
+        function checkStatus() {
+            if (completed || requestInProgress) return;
+            
+            requestInProgress = true;
+            
+            $.ajax({
+                url: '{% url "palet_app:optimization_status" %}',
+                type: 'GET',
+                dataType: 'json',
+                timeout: 10000,  // 10 saniye timeout
+                success: function(response) {
+                    requestInProgress = false;
+                    retryCount = 0;  // Başarılı istek, retry sayacını sıfırla
+                    
+                    if (response.success) {
+                        if (response.completed) {
+                            // İşlem tamamlandı, analiz sayfasına yönlendir
+                            completed = true;
+                            progressBar.css('width', '100%');
+                            progressText.text('Optimizasyon tamamlandı! Yönlendiriliyor...');
+                            addLogMessage('✓ İşlem başarıyla tamamlandı!');
+                            
+                            setTimeout(function() {
+                                window.location.href = response.next_url;
+                            }, 1500);
+                        } else {
+                            // İlerleme çubuğunu güncelle
+                            const progress = (response.current_step / response.total_steps) * 100;
+                            progressBar.css('width', `${progress}%`);
+                            
+                            // Mesajları güncelle, ancak yalnızca yeni mesajları ekle
+                            if (response.messages.length > lastStepCount) {
+                                for (let i = lastStepCount; i < response.messages.length; i++) {
+                                    addLogMessage(response.messages[i]);
+                                }
+                                lastStepCount = response.messages.length;
+                            }
+                            
+                            // Hatayı kontrol et
+                            if (response.current_step < 0) {
+                                progressText.text('Bir hata oluştu!');
+                                addLogMessage('⚠ İşlem sırasında bir hata oluştu. Lütfen tekrar deneyin.', true);
+                                completed = true;
+                            } else {
+                                // Duruma göre metni güncelle
+                                progressText.text(`Adım ${response.current_step} / ${response.total_steps}: İşleniyor...`);
+                            }
+                            
+                            // Tekrar kontrol et (2 saniye sonra)
+                            if (!completed) {
+                                timeoutId = setTimeout(checkStatus, 2000);
+                            }
+                        }
+                    } else {
+                        // Hata
+                        addLogMessage('⚠ Hata: ' + response.error, true);
+                        progressText.text('Bir hata oluştu!');
+                        completed = true;
+                    }
+                },
+                error: function(xhr, status, error) {
+                    requestInProgress = false;
+                    
+                    if (status === 'timeout') {
+                        addLogMessage('⏱ İstek zaman aşımına uğradı. Yeniden deneniyor...');
+                    } else {
+                        retryCount++;
+                        addLogMessage(`⚠ Bağlantı hatası (Deneme ${retryCount}/${maxRetries})`);
+                    }
+                    
+                    // Maksimum deneme sayısına ulaşıldıysa durdur
+                    if (retryCount >= maxRetries) {
+                        addLogMessage('✗ Sunucu ile iletişim kurulamadı. Lütfen sayfayı yenileyin.', true);
+                        progressText.text('Bağlantı hatası!');
+                        completed = true;
+                    } else if (!completed) {
+                        // Yeniden dene (5 saniye sonra)
+                        timeoutId = setTimeout(checkStatus, 5000);
+                    }
+                }
+            });
+        }
+        
+        // Log mesajı ekle
+        function addLogMessage(message, isError = false) {
+            const timestamp = new Date().toLocaleTimeString();
+            const msgClass = isError ? 'text-red-500' : 'text-green-400';
+            
+            const logEntry = $(`<div class="${msgClass}">[${timestamp}] ${message}</div>`);
+            logContainer.append(logEntry);
+            
+            // Otomatik kaydır
+            const container = document.getElementById('logContainer');
+            container.scrollTop = container.scrollHeight;
+        }
+        
+        // Sayfa kapatılırken temizlik
+        $(window).on('beforeunload', function() {
+            if (timeoutId) {
+                clearTimeout(timeoutId);
+            }
+        });
+        
+        // Başlangıç ​​mesajı
+        const algoritma = '{{ request.session.algoritma|default:"greedy" }}';
+        addLogMessage('🚀 Optimizasyon işlemi başlatılıyor...');
+        
+        {% if request.session.container_info %}
+        addLogMessage('📦 Container: {{ request.session.container_info.length }}x{{ request.session.container_info.width }}x{{ request.session.container_info.height }} cm');
+        {% endif %}
+        
+        if (algoritma === 'genetic') {
+            addLogMessage('🧬 Genetik Algoritma seçildi');
+            addLogMessage('⏳ Bu işlem 1-2 dakika sürebilir...');
+            addLogMessage('🔬 50 nesil evrim gerçekleşecek');
+        } else {
+            addLogMessage('⚡ Hızlı Optimizasyon (Greedy) seçildi');
+            addLogMessage('⏳ İşlem 30-60 saniye sürebilir...');
+        }
+        
+        // İlk durumu kontrol et
+        setTimeout(checkStatus, 1000);
+    });
+</script>
+{% endblock %} 

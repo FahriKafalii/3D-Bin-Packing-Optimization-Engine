@@ -1,0 +1,185 @@
+{% extends 'base.html' %}
+
+{% block title %}Ürün Listesi - Akıllı Palet Yerleştirme{% endblock %}
+
+{% block content %}
+<div class="container mx-auto px-4 py-8">
+    <div class="mb-8">
+        <h1 class="text-3xl font-bold text-gray-800 mb-4">Yüklenen Ürünler</h1>
+        
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+            <div class="bg-blue-100 rounded-lg p-4 shadow">
+                <div class="flex items-center">
+                    <i class="fas fa-box text-blue-600 text-3xl mr-4"></i>
+                    <div>
+                        <p class="text-gray-600 text-sm">Toplam Ürün Çeşidi</p>
+                        <p class="text-2xl font-bold text-blue-600">{{ toplam_urun_cesidi }}</p>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="bg-green-100 rounded-lg p-4 shadow">
+                <div class="flex items-center">
+                    <i class="fas fa-boxes text-green-600 text-3xl mr-4"></i>
+                    <div>
+                        <p class="text-gray-600 text-sm">Toplam Paket Sayısı</p>
+                        <p class="text-2xl font-bold text-green-600">{{ toplam_paket }}</p>
+                    </div>
+                </div>
+            </div>
+            
+            {% if container_info %}
+            <div class="bg-purple-100 rounded-lg p-4 shadow">
+                <div class="flex items-center">
+                    <i class="fas fa-pallet text-purple-600 text-3xl mr-4"></i>
+                    <div>
+                        <p class="text-gray-600 text-sm">Palet Boyutu</p>
+                        <p class="text-lg font-bold text-purple-600">
+                            {{ container_info.length }}x{{ container_info.width }}x{{ container_info.height }} cm
+                        </p>
+                        <p class="text-xs text-gray-500">Max: {{ container_info.weight }} kg</p>
+                        <p class="text-xs text-gray-500">
+                            Palet ID: {{ container_info.palet_id|default:1 }}
+                        </p>
+                    </div>
+                </div>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+
+    <div class="bg-white shadow-lg rounded-lg overflow-hidden mb-6">
+        <div class="overflow-x-auto">
+            <table class="min-w-full divide-y divide-gray-200">
+                <thead class="bg-gray-50">
+                    <tr>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Ürün Kodu</th>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Boyutlar (cm)</th>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Ağırlık</th>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Mukavemet</th>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Paket Adedi</th>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Toplam Ağırlık</th>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Toplam Hacim</th>
+                    </tr>
+                </thead>
+                <tbody class="bg-white divide-y divide-gray-200">
+                    {% for urun in urun_listesi %}
+                    <tr class="hover:bg-gray-50 transition-colors">
+                        <td class="px-6 py-4 whitespace-nowrap">
+                            <div class="flex items-center">
+                                <i class="fas fa-cube text-blue-500 mr-2"></i>
+                                <div>
+                                    <div class="text-sm font-medium text-gray-900">{{ urun.urun_kodu }}</div>
+                                </div>
+                            </div>
+                        </td>
+                        <td class="px-6 py-4 whitespace-nowrap">
+                            <div class="text-sm text-gray-900">
+                                <i class="fas fa-ruler-combined text-gray-400 mr-1"></i>
+                                {{ urun.boy|floatformat:1 }} × {{ urun.en|floatformat:1 }} × {{ urun.yukseklik|floatformat:1 }}
+                            </div>
+                        </td>
+                        <td class="px-6 py-4 whitespace-nowrap">
+                            <div class="text-sm text-gray-900">
+                                <i class="fas fa-weight text-gray-400 mr-1"></i>
+                                {{ urun.agirlik|floatformat:2 }} kg
+                            </div>
+                        </td>
+                        <td class="px-6 py-4 whitespace-nowrap">
+                            <div class="text-sm text-gray-900">
+                                {% if urun.mukavemet == 'N/A' %}
+                                <span class="text-gray-400">{{ urun.mukavemet }}</span>
+                                {% else %}
+                                {{ urun.mukavemet|floatformat:0 }} kg
+                                {% endif %}
+                            </div>
+                        </td>
+                        <td class="px-6 py-4 whitespace-nowrap">
+                            <span class="px-2 py-1 inline-flex text-xs leading-5 font-semibold rounded-full bg-green-100 text-green-800">
+                                {{ urun.adet }} adet
+                            </span>
+                        </td>
+                        <td class="px-6 py-4 whitespace-nowrap">
+                            <div class="text-sm font-medium text-gray-900">
+                                {{ urun.toplam_agirlik|floatformat:2 }} kg
+                            </div>
+                        </td>
+                        <td class="px-6 py-4 whitespace-nowrap">
+                            <div class="text-sm text-gray-900">
+                                {{ urun.toplam_hacim|floatformat:0 }} cm³
+                            </div>
+                        </td>
+                    </tr>
+                    {% empty %}
+                    <tr>
+                        <td colspan="7" class="px-6 py-4 text-center text-gray-500">Ürün bulunamadı</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <div class="flex justify-center space-x-4">
+        <a href="{% url 'palet_app:home' %}" class="bg-gray-500 hover:bg-gray-600 text-white font-bold py-3 px-8 rounded-xl transition-colors">
+            <i class="fas fa-arrow-left mr-2"></i> Geri Dön
+        </a>
+        <button id="startOptimizationBtn" class="bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 text-white font-bold py-3 px-8 rounded-xl transition-all transform hover:scale-105 shadow-lg">
+            <i class="fas fa-play mr-2"></i> Optimizasyona Başla
+        </button>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+$(document).ready(function() {
+    let isProcessing = false;
+    
+    $('#startOptimizationBtn').on('click', function(e) {
+        e.preventDefault();
+        if (isProcessing) return false;
+        isProcessing = true;
+        
+        $.ajax({
+            url: '{% url "palet_app:start_placement" %}',
+            type: 'POST',
+            data: JSON.stringify({ algoritma: 'genetic' }),
+            contentType: 'application/json',
+            headers: { 'X-CSRFToken': '{{ csrf_token }}' },
+            beforeSend: function() {
+                $('#startOptimizationBtn').prop('disabled', true).html('<i class="fas fa-spinner fa-spin mr-2"></i> 🧬 Genetik Algoritma Başlatılıyor...');
+            },
+            success: function(response) {
+                if (response.success) {
+                    window.location.href = '{% url "palet_app:processing" %}';
+                } else {
+                    alert('Hata: ' + response.error);
+                    isProcessing = false;
+                    $('#startOptimizationBtn').prop('disabled', false).html('<i class="fas fa-play mr-2"></i> Optimizasyona Başla');
+                }
+            },
+            error: function(xhr) {
+                try {
+                    const response = JSON.parse(xhr.responseText);
+                    alert('Hata: ' + (response.error || 'Bir hata oluştu.'));
+                } catch (e) {
+                    alert('Optimizasyon başlatılırken bir hata oluştu.');
+                }
+                isProcessing = false;
+                $('#startOptimizationBtn').prop('disabled', false).html('<i class="fas fa-play mr-2"></i> Optimizasyona Başla');
+            }
+        });
+        return false;
+    });
+    
+    $('input[name="algoritma"]').on('change', function() {
+        const algoritma = $(this).val();
+        const text = algoritma === 'genetic' ? 'Genetik Algoritma ile Başla' : 'Hızlı Optimizasyon ile Başla';
+        if (!isProcessing) {
+            $('#startOptimizationBtn').html('<i class="fas fa-play mr-2"></i> ' + text);
+        }
+    });
+});
+</script>
+{% endblock %}

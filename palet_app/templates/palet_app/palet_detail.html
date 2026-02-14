@@ -1,0 +1,360 @@
+{% extends 'base.html' %}
+
+{% block title %}Palet {{ palet.palet_id }} - Akıllı Palet Yerleştirme{% endblock %}
+
+{% block content %}
+<div class="py-6">
+    <div class="mb-4 flex justify-between items-center">
+        <h2 class="text-2xl font-bold text-gray-800">
+            Palet {{ palet.palet_id }}
+        </h2>
+        
+        <div class="text-sm text-gray-600">
+           
+            <span class="inline-block px-3 py-1 rounded-full {% if palet.doluluk_orani > 85 %}bg-green-100 text-green-800{% elif palet.doluluk_orani > 75 %}bg-yellow-100 text-yellow-800{% else %}bg-red-100 text-red-800{% endif %}">
+                Doluluk: {{ palet.doluluk_orani|floatformat:1 }}%
+            </span>
+            <span class="inline-block px-3 py-1 rounded-full bg-gray-100 text-gray-800">
+                Ağırlık: {{ palet.toplam_agirlik|floatformat:1 }} kg
+            </span>
+        </div>
+    </div>
+    
+    <div class="bg-white shadow-lg rounded-xl p-6 mb-8">
+        <div class="flex flex-col md:flex-row md:space-x-6">
+            <!-- İnteraktif 3D Görünüm -->
+            <div class="md:w-1/2 mb-6 md:mb-0">
+                <div class="border rounded-lg p-2 bg-gray-50">
+                    <!-- 3D Kontrol Butonları -->
+                    <div class="flex gap-2 mb-3 flex-wrap">
+                        <button onclick="resetCamera()" class="px-3 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 text-sm">
+                            <i class="fas fa-redo"></i> Kamerayı Sıfırla
+                        </button>
+                        <button onclick="setView('top')" class="px-3 py-2 bg-gray-600 text-white rounded hover:bg-gray-700 text-sm">
+                            <i class="fas fa-arrow-up"></i> Üstten
+                        </button>
+                        <button onclick="setView('front')" class="px-3 py-2 bg-gray-600 text-white rounded hover:bg-gray-700 text-sm">
+                            <i class="fas fa-eye"></i> Önden
+                        </button>
+                        <button onclick="setView('side')" class="px-3 py-2 bg-gray-600 text-white rounded hover:bg-gray-700 text-sm">
+                            <i class="fas fa-arrows-alt-h"></i> Yandan
+                        </button>
+                        <button onclick="toggleWireframe()" class="px-3 py-2 bg-purple-600 text-white rounded hover:bg-purple-700 text-sm">
+                            <i class="fas fa-cube"></i> <span id="wireframe-text">Çerçeve Göster</span>
+                        </button>
+                    </div>
+                    
+                    <!-- 3D Canvas -->
+                    <div id="palet-3d-container" style="width: 100%; height: 600px; border-radius: 8px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);"></div>
+                    
+                    <p class="text-center text-sm text-gray-500 mt-3">
+                        <i class="fas fa-mouse mr-1"></i>
+                        Fareyle sürükleyerek döndürün, tekerlekle yakınlaştırın
+                    </p>
+                    
+                    <div class="mt-3 text-center">
+                        <button onclick="captureScreenshot()" class="inline-block px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700 text-sm">
+                            <i class="fas fa-camera mr-1"></i> Ekran Görüntüsü Al
+                        </button>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Ürün Listesi -->
+            <div class="md:w-1/2">
+                <h3 class="text-lg font-bold text-gray-800 mb-4">Yerleştirilen Ürünler ({{ urun_detaylari|length }})</h3>
+                
+                <!-- Arama Kutusu -->
+                <div class="mb-3">
+                    <input type="text" id="productSearch" placeholder="Ürün kodu veya adı ara..." 
+                           class="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-none">
+                </div>
+                
+                <div class="overflow-y-auto border rounded" style="max-height: 650px;">
+                    <table class="w-full border-collapse text-sm">
+                        <thead>
+                            <tr class="bg-gray-100">
+                                <th class="text-left p-2 border">#</th>
+                                <th class="text-left p-2 border">Ürün</th>
+                                <th class="text-left p-2 border">Boyut</th>
+                                <th class="text-left p-2 border">Konum</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for detay in urun_detaylari %}
+                            <tr class="{% cycle 'bg-white' 'bg-gray-50' %}">
+                                <td class="p-2 border">{{ forloop.counter }}</td>
+                                <td class="p-2 border">
+                                    <div class="font-medium">{{ detay.urun.urun_adi }}</div>
+                                    <div class="text-xs text-gray-600 flex items-center gap-2">
+                                        <span>{{ detay.urun.urun_kodu }}</span>
+                                        {% if detay.renk_rgb %}
+                                            <span class="inline-block w-4 h-4 rounded border border-gray-300" 
+                                                  style="background-color: rgb({{ detay.renk_rgb.0 }}, {{ detay.renk_rgb.1 }}, {{ detay.renk_rgb.2 }});"></span>
+                                        {% endif %}
+                                    </div>
+                                </td>
+                                <td class="p-2 border">
+                                    {{ detay.boyut.0 }}x{{ detay.boyut.1 }}x{{ detay.boyut.2 }} cm
+                                </td>
+                                <td class="p-2 border">
+                                    ({{ detay.konum.0 }}, {{ detay.konum.1 }}, {{ detay.konum.2 }})
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <div class="flex flex-wrap justify-between mt-6 gap-3">
+        <div class="flex space-x-3">
+            {% if prev_id %}
+                <a href="{% url 'palet_app:palet_detail' palet_id=prev_id %}" class="bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded px-4 py-2 flex items-center">
+                    <i class="fas fa-arrow-left mr-2"></i> Önceki Palet
+                </a>
+            {% endif %}
+            
+            {% if next_id %}
+                <a href="{% url 'palet_app:palet_detail' palet_id=next_id %}" class="bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded px-4 py-2 flex items-center">
+                    Sonraki Palet <i class="fas fa-arrow-right ml-2"></i>
+                </a>
+            {% endif %}
+        </div>
+        
+        <div class="flex space-x-3">
+            <a href="{% url 'palet_app:analysis' %}" class="bg-gray-600 hover:bg-gray-700 text-white font-semibold rounded px-4 py-2 flex items-center">
+                <i class="fas fa-th-large mr-2"></i> Özete Dön
+            </a>
+            
+            <a href="{% url 'palet_app:home' %}" class="bg-green-600 hover:bg-green-700 text-white font-semibold rounded px-4 py-2 flex items-center">
+                <i class="fas fa-upload mr-2"></i> Yeni Veri Yükle
+            </a>
+        </div>
+    </div>
+    
+    <div class="text-center text-sm text-gray-600 mt-4">
+        {{ palet.palet_id }} / {{ total_palets }} Palet
+    </div>
+</div>
+
+<!-- Three.js kütüphanesi -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+
+<script>
+// Three.js 3D Görselleştirme
+let scene, camera, renderer, controls;
+let paletMesh, itemMeshes = [];
+let wireframeEnabled = false;
+
+// Sahneyi başlat
+function init3DScene() {
+    const container = document.getElementById('palet-3d-container');
+    const width = container.clientWidth;
+    const height = container.clientHeight;
+    
+    // Sahne oluştur
+    scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x1a1a2e);
+    
+    // Kamera oluştur
+    camera = new THREE.PerspectiveCamera(50, width / height, 1, 10000);
+    camera.position.set(200, 200, 200);
+    camera.lookAt(0, 0, 0);
+    
+    // Renderer oluştur
+    renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+    renderer.setSize(width, height);
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    container.appendChild(renderer.domElement);
+    
+    // OrbitControls ekle (fareyle döndürme)
+    controls = new THREE.OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.05;
+    controls.screenSpacePanning = false;
+    controls.minDistance = 50;
+    controls.maxDistance = 1000;
+    
+    // Işıklar
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+    scene.add(ambientLight);
+    
+    const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+    directionalLight.position.set(100, 200, 100);
+    directionalLight.castShadow = true;
+    directionalLight.shadow.mapSize.width = 2048;
+    directionalLight.shadow.mapSize.height = 2048;
+    scene.add(directionalLight);
+    
+    const pointLight = new THREE.PointLight(0xffffff, 0.4);
+    pointLight.position.set(-100, 100, -100);
+    scene.add(pointLight);
+    
+    // Grid yardımcısı
+    const gridHelper = new THREE.GridHelper(300, 30, 0x444444, 0x222222);
+    scene.add(gridHelper);
+    
+    // Palet verilerini yükle
+    loadPaletData();
+    
+    // Animasyon döngüsü
+    animate();
+    
+    // Pencere yeniden boyutlandırma
+    window.addEventListener('resize', onWindowResize, false);
+}
+
+// Palet verilerini API'den yükle
+function loadPaletData() {
+    fetch('{% url "palet_app:palet_3d_data" palet_id=palet.palet_id %}')
+        .then(response => response.json())
+        .then(data => {
+            createPalet(data);
+            createItems(data.items, data);
+        })
+        .catch(error => console.error('3D veri yükleme hatası:', error));
+}
+
+// Palet kutusunu oluştur (çerçeve)
+function createPalet(data) {
+    const geometry = new THREE.BoxGeometry(data.boy, data.yukseklik, data.en);
+    const edges = new THREE.EdgesGeometry(geometry);
+    const material = new THREE.LineBasicMaterial({ color: 0xff0000, linewidth: 2 });
+    const wireframe = new THREE.LineSegments(edges, material);
+    
+    // Paleti merkeze konumlandır
+    wireframe.position.set(data.boy / 2, data.yukseklik / 2, data.en / 2);
+    scene.add(wireframe);
+    paletMesh = wireframe;
+}
+
+// Ürün kutularını oluştur
+function createItems(items, paletData) {
+    items.forEach((item, index) => {
+        // Kutu geometrisi
+        const geometry = new THREE.BoxGeometry(item.boy, item.yukseklik, item.en);
+        
+        // Malzeme (renkli, parlak)
+        const color = new THREE.Color(item.renk.r, item.renk.g, item.renk.b);
+        const material = new THREE.MeshPhongMaterial({
+            color: color,
+            transparent: true,
+            opacity: 0.9,
+            shininess: 100,
+            specular: 0x444444
+        });
+        
+        const cube = new THREE.Mesh(geometry, material);
+        
+        // Pozisyon (merkeze göre ayarla)
+        cube.position.set(
+            item.x + item.boy / 2,
+            item.z + item.yukseklik / 2,
+            item.y + item.en / 2
+        );
+        
+        // Gölge
+        cube.castShadow = true;
+        cube.receiveShadow = true;
+        
+        // Kenar çizgileri
+        const edges = new THREE.EdgesGeometry(geometry);
+        const lineMaterial = new THREE.LineBasicMaterial({ color: 0x000000, linewidth: 1 });
+        const wireframe = new THREE.LineSegments(edges, lineMaterial);
+        wireframe.position.copy(cube.position);
+        
+        scene.add(cube);
+        scene.add(wireframe);
+        
+        itemMeshes.push({ mesh: cube, wireframe: wireframe, data: item });
+    });
+    
+    // Kamerayı paletin merkezine odakla
+    const centerX = paletData.boy / 2;
+    const centerY = paletData.yukseklik / 2;
+    const centerZ = paletData.en / 2;
+    controls.target.set(centerX, centerY, centerZ);
+}
+
+// Animasyon döngüsü
+function animate() {
+    requestAnimationFrame(animate);
+    controls.update();
+    renderer.render(scene, camera);
+}
+
+// Pencere yeniden boyutlandırma
+function onWindowResize() {
+    const container = document.getElementById('palet-3d-container');
+    const width = container.clientWidth;
+    const height = container.clientHeight;
+    
+    camera.aspect = width / height;
+    camera.updateProjectionMatrix();
+    renderer.setSize(width, height);
+}
+
+// Kamera görünümleri
+function resetCamera() {
+    camera.position.set(200, 200, 200);
+    controls.reset();
+}
+
+function setView(view) {
+    const distance = 250;
+    switch(view) {
+        case 'top':
+            camera.position.set(60, distance, 50);
+            break;
+        case 'front':
+            camera.position.set(60, 90, distance);
+            break;
+        case 'side':
+            camera.position.set(distance, 90, 50);
+            break;
+    }
+}
+
+// Wireframe toggle
+function toggleWireframe() {
+    wireframeEnabled = !wireframeEnabled;
+    itemMeshes.forEach(item => {
+        item.mesh.visible = !wireframeEnabled;
+        item.wireframe.visible = wireframeEnabled;
+    });
+    document.getElementById('wireframe-text').textContent = 
+        wireframeEnabled ? 'Dolu Göster' : 'Çerçeve Göster';
+}
+
+// Ekran görüntüsü al
+function captureScreenshot() {
+    renderer.render(scene, camera);
+    const imgData = renderer.domElement.toDataURL('image/png');
+    const link = document.createElement('a');
+    link.download = 'palet_{{ palet.palet_id }}_3d.png';
+    link.href = imgData;
+    link.click();
+}
+
+// Ürün Arama
+document.getElementById('productSearch').addEventListener('input', function(e) {
+    const searchTerm = e.target.value.toLowerCase();
+    const rows = document.querySelectorAll('tbody tr');
+    
+    rows.forEach(row => {
+        const text = row.textContent.toLowerCase();
+        row.style.display = text.includes(searchTerm) ? '' : 'none';
+    });
+});
+
+// Sayfa yüklendiğinde 3D sahneyi başlat
+document.addEventListener('DOMContentLoaded', function() {
+    init3DScene();
+});
+</script>
+{% endblock %} 
