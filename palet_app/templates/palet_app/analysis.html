@@ -26,6 +26,31 @@
     <div class="bg-white shadow-lg rounded-xl p-6 mb-8">
         <h3 class="text-xl font-bold text-gray-800 mb-4">Optimizasyon Bilgileri</h3>
         
+        <!-- Algoritma Bilgisi -->
+        <div class="mb-4 p-4 rounded-lg {% if optimization.algoritma == 'genetic' %}bg-blue-50 border-2 border-blue-200{% elif optimization.algoritma == 'differential_evolution' %}bg-purple-50 border-2 border-purple-200{% else %}bg-gray-50 border-2 border-gray-200{% endif %}">
+            <div class="flex items-center">
+                {% if optimization.algoritma == 'genetic' %}
+                    <i class="fas fa-dna text-blue-600 text-2xl mr-3"></i>
+                    <div>
+                        <h4 class="font-bold text-blue-800">Genetik Algoritma (GA)</h4>
+                        <p class="text-sm text-gray-600">Hızlı yakınsama ve güvenilir sonuçlar</p>
+                    </div>
+                {% elif optimization.algoritma == 'differential_evolution' %}
+                    <i class="fas fa-atom text-purple-600 text-2xl mr-3"></i>
+                    <div>
+                        <h4 class="font-bold text-purple-800">Differential Evolution (DE)</h4>
+                        <p class="text-sm text-gray-600">İleri seviye optimizasyon teknikleri</p>
+                    </div>
+                {% else %}
+                    <i class="fas fa-bolt text-gray-600 text-2xl mr-3"></i>
+                    <div>
+                        <h4 class="font-bold text-gray-800">Greedy Algorithm</h4>
+                        <p class="text-sm text-gray-600">Hızlı ve basit yerleştirme</p>
+                    </div>
+                {% endif %}
+            </div>
+        </div>
+        
         <div class="flex flex-col md:flex-row md:space-x-8 mb-4">
             <div class="md:w-1/2 mb-4 md:mb-0">
                 <div class="border border-gray-200 rounded-lg overflow-hidden">
