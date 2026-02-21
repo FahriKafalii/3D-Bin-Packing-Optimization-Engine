@@ -14,8 +14,9 @@ from src.models import PaletConfig, UrunData
 from src.core.single_pallet import (
     simulate_single_pallet,
     generate_grid_placement,
+    DEFAULT_SINGLE_THRESHOLD,
 )
-from src.core.packing import pack_maximal_rectangles
+from src.core.packing import pack_maximal_rectangles, merge_and_repack, compact_pallet
 from src.core.genetic_algorithm import run_ga
 from src.core.mix_pallet import mix_palet_yerlestirme_main
 from src.utils.helpers import urun_hacmi, group_products_smart
@@ -105,7 +106,7 @@ def single_palet_yerlestirme(urunler, container_info, optimization=None):
                 num_full_pallets = total_qty // capacity
                 remainder = total_qty % capacity
                 remainder_fill_ratio = (remainder * item_volume) / pallet_volume if remainder > 0 else 0
-                create_partial = (remainder_fill_ratio >= 0.90)
+                create_partial = (remainder_fill_ratio >= DEFAULT_SINGLE_THRESHOLD)
                 
                 print(f"  -> ✅ ONAYLANDI. {sim_result['reason']}")
                 print(f"  -> Efficiency: {efficiency*100:.1f}% | Capacity: {capacity} items/pallet")
@@ -120,12 +121,12 @@ def single_palet_yerlestirme(urunler, container_info, optimization=None):
                 num_full_pallets = 0
                 remainder = total_qty
                 partial_fill_ratio = (remainder * item_volume) / pallet_volume
-                create_partial = (partial_fill_ratio >= 0.90)
+                create_partial = (partial_fill_ratio >= DEFAULT_SINGLE_THRESHOLD)
                 
                 if create_partial:
                     print(f"  -> ✅ ONAYLANDI (Partial). Fill: {partial_fill_ratio*100:.1f}%")
                 else:
-                    print(f"  -> ⚠️  REJECTED. Fill: {partial_fill_ratio*100:.1f}% < 90%")
+                    print(f"  -> ⚠️  REJECTED. Fill: {partial_fill_ratio*100:.1f}% < {DEFAULT_SINGLE_THRESHOLD:.0%}")
                     mix_pool.extend(group_items)
                     continue
             
@@ -177,13 +178,34 @@ def single_palet_yerlestirme(urunler, container_info, optimization=None):
 def chromosome_to_palets(chromosome, palet_cfg, optimization, baslangic_id):
     """
     En iyi kromozomdan Django Palet nesneleri oluşturur.
+
+    Adımlar:
+        1. Kromozom decode → ürün sırası
+        2. pack_maximal_rectangles → ham palet dict listesi
+        3. compact_pallet          → her paleti gravite + orijin yönünde sıkıştır
+        4. merge_and_repack        → düşük doluluklu paletleri birleştir (post-opt)
+        5. Django Palet nesnelerine dönüştür ve kaydet
     """
     siralanmis_urunler = [chromosome.urunler[i] for i in chromosome.sira_gen]
     pallets = pack_maximal_rectangles(siralanmis_urunler, palet_cfg)
-    
+
+    # ── Kompaksiyon (gravity + origin) ────────────────────────────────
+    for p in pallets:
+        compact_pallet(p, palet_cfg)
+
+    # ── Merge & Repack post-optimizasyonu ─────────────────────────────
+    onceki_sayi = len(pallets)
+    pallets = merge_and_repack(pallets, palet_cfg)
+    sonraki_sayi = len(pallets)
+    if sonraki_sayi < onceki_sayi:
+        print(
+            f"[MERGE & REPACK] {onceki_sayi} → {sonraki_sayi} palet "
+            f"({onceki_sayi - sonraki_sayi} palet azaltıldı)"
+        )
+
     django_paletler = []
     palet_id = baslangic_id
-    
+
     for pallet_data in pallets:
         palet = _create_django_palet(
             pallet_data['items'], palet_cfg, optimization, palet_id, 'mix',
@@ -191,8 +213,200 @@ def chromosome_to_palets(chromosome, palet_cfg, optimization, baslangic_id):
         )
         django_paletler.append(palet)
         palet_id += 1
-    
+
     return django_paletler
+
+
+# ====================================================================
+# MERGE & REPACK SERVİSİ
+# ====================================================================
+
+def merge_repack_service(
+    mix_paletler: list,
+    palet_cfg,
+    optimization,
+    baslangic_id: int,
+    urun_data_listesi: list,
+) -> tuple:
+    """
+    Django Palet listesini packer dict formatına çevirir, merge_and_repack_v2
+    çalıştırır ve sonuç iyileşmişse eski paletleri DB'den silip yenileri kaydeder.
+
+    Args:
+        mix_paletler:      Mevcut Django Palet nesneleri (mix türü).
+        palet_cfg:         PaletConfig nesnesi.
+        optimization:      Django Optimization nesnesi.
+        baslangic_id:      Yeni paleter için başlangıç ID'si.
+        urun_data_listesi: UrunData nesneleri — item['urun'] referansları için gerekli.
+
+    Returns:
+        (final_django_paletler, metrics) — kabul edilmezse orijinal paletler döner.
+    """
+    from src.core.merge_repack import merge_and_repack_v2, MergeRepackMetrics
+    import logging
+    logger = logging.getLogger(__name__)
+
+    if len(mix_paletler) < 2:
+        return mix_paletler, MergeRepackMetrics.no_op("insufficient_pallets")
+
+    # ── 1) UrunData hızlı erişim sözlüğü ─────────────────────────────
+    urun_data_by_id = {ud.id: ud for ud in urun_data_listesi}
+
+    # ── 2) Django Palet → packer dict ────────────────────────────────
+    packer_pallets = []
+    for palet in mix_paletler:
+        konumlar = palet.json_to_dict(palet.urun_konumlari)
+        boyutlar = palet.json_to_dict(palet.urun_boyutlari)
+        items = []
+        total_weight = 0.0
+        for urun_id_str, pos in konumlar.items():
+            urun_id = int(urun_id_str)
+            ud = urun_data_by_id.get(urun_id)
+            if ud is None:
+                logger.warning("[MR] UrunData id=%s bulunamadı, atlanıyor", urun_id_str)
+                continue
+            dim = boyutlar.get(urun_id_str, [ud.boy, ud.en, ud.yukseklik])
+            items.append({
+                'urun': ud,
+                'x': float(pos[0]),
+                'y': float(pos[1]),
+                'z': float(pos[2]),
+                'L': float(dim[0]),
+                'W': float(dim[1]),
+                'H': float(dim[2]),
+            })
+            total_weight += ud.agirlik
+        packer_pallets.append({'items': items, 'weight': total_weight})
+
+    # ── 3) Merge & Repack v2 ──────────────────────────────────────────
+    optimized, metrics = merge_and_repack_v2(packer_pallets, palet_cfg)
+
+    if not metrics.accepted:
+        return mix_paletler, metrics
+
+    # ── 4) Eski Django paletleri sil ─────────────────────────────────
+    for palet in mix_paletler:
+        palet.delete()
+
+    # ── 5) Yeni Django paletleri oluştur ve kaydet ───────────────────
+    new_django_paletler = []
+    palet_id = baslangic_id
+    for pallet_data in optimized:
+        p = _create_django_palet(
+            pallet_data['items'],
+            palet_cfg,
+            optimization,
+            palet_id,
+            'mix',
+            items_are_dicts=True,
+        )
+        new_django_paletler.append(p)
+        palet_id += 1
+
+    logger.info(
+        "[MR] Service complete: %d → %d mix pallets. %s",
+        len(mix_paletler), len(new_django_paletler), metrics.summary(),
+    )
+    return new_django_paletler, metrics
+
+
+def merge_repack_mix_service(
+    mix_paletler: list,
+    palet_cfg,
+    optimization,
+    baslangic_id: int,
+    urun_data_listesi: list,
+) -> tuple:
+    """
+    İteratif BFD Merge & Repack servis katmanı.
+
+    Django Palet listesini packer dict formatına çevirir,
+    merge_and_repack_mix (İteratif BFD) çalıştırır ve sonuç iyileşmişse
+    eski paletleri DB'den silip yenileri kaydeder.
+
+    Algoritma özeti:
+        - En az dolu paleti seç (src).
+        - src'deki item'ları hacim desc sırayla (BFD) diğer paletlere taş.
+        - Tümü sığar: palet kalkar. Sığmaz: rollback, sonraki src'ye geç.
+        - Palet sayısı düşüyor VEYA avg/min doluluk artıyor ise kabul et.
+
+    Args:
+        mix_paletler:      Mevcut Django Palet nesneleri (mix türü).
+        palet_cfg:         PaletConfig nesnesi.
+        optimization:      Django Optimization nesnesi.
+        baslangic_id:      Yeni paletler için başlangıç Palet ID'si.
+        urun_data_listesi: UrunData nesneleri — item['urun'] referansları için.
+
+    Returns:
+        (final_django_paletler, MixMergeMetrics)
+        - Kabul edilmezse orijinal liste, DB değiştirilmeden döner.
+    """
+    from src.core.merge_repack import merge_and_repack_mix, MixMergeMetrics
+    import logging
+    svc_logger = logging.getLogger(__name__)
+
+    if len(mix_paletler) < 2:
+        return mix_paletler, MixMergeMetrics.no_op("insufficient_pallets")
+
+    # ── 1) UrunData hızlı erişim sözlüğü ─────────────────────────────
+    urun_data_by_id = {ud.id: ud for ud in urun_data_listesi}
+
+    # ── 2) Django Palet → packer dict ───────────────────────────────
+    packer_pallets = []
+    for palet in mix_paletler:
+        konumlar = palet.json_to_dict(palet.urun_konumlari)
+        boyutlar = palet.json_to_dict(palet.urun_boyutlari)
+        items = []
+        total_weight = 0.0
+        for urun_id_str, pos in konumlar.items():
+            urun_id = int(urun_id_str)
+            ud = urun_data_by_id.get(urun_id)
+            if ud is None:
+                svc_logger.warning("[MixMerge] UrunData id=%s bulunamadı", urun_id_str)
+                continue
+            dim = boyutlar.get(urun_id_str, [ud.boy, ud.en, ud.yukseklik])
+            items.append({
+                'urun': ud,
+                'x': float(pos[0]),
+                'y': float(pos[1]),
+                'z': float(pos[2]),
+                'L': float(dim[0]),
+                'W': float(dim[1]),
+                'H': float(dim[2]),
+            })
+            total_weight += ud.agirlik
+        packer_pallets.append({'items': items, 'weight': total_weight})
+
+    # ── 3) İteratif BFD ──────────────────────────────────────────
+    optimized, metrics = merge_and_repack_mix(packer_pallets, palet_cfg)
+
+    if not metrics.accepted:
+        return mix_paletler, metrics
+
+    # ── 4) Eski Django paletleri sil ───────────────────────────────
+    for palet in mix_paletler:
+        palet.delete()
+
+    # ── 5) Yeni Django paletleri oluştur ve kaydet ────────────────
+    new_django_paletler = []
+    palet_id = baslangic_id
+    for pallet_data in optimized:
+        p = _create_django_palet(
+            pallet_data['items'],
+            palet_cfg,
+            optimization,
+            palet_id,
+            'mix',
+            items_are_dicts=True,
+        )
+        new_django_paletler.append(p)
+        palet_id += 1
+
+    svc_logger.info(
+        "[MixMerge] Service done: %d → %d pallets. %s",
+        len(mix_paletler), len(new_django_paletler), metrics.summary(),
+    )
+    return new_django_paletler, metrics
 
 
 def mix_palet_data_to_django(mix_palet_data, palet_cfg, optimization):
