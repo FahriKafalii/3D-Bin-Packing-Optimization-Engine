@@ -192,7 +192,14 @@ def run_ga(urunler, palet_cfg: PaletConfig, population_size=None, generations=No
     
     if elitism is None:
         elitism = max(2, int(population_size * 0.05))
-    
+
+    # ── DEFENSIVE SAFEGUARDS ────────────────────────────────────────────
+    population_size = max(2, population_size)
+    generations     = max(1, generations)
+    mutation_rate   = max(0.0, min(1.0, mutation_rate))
+    elitism         = min(elitism, population_size - 1)
+    # ─────────────────────────────────────────────────────────────────────
+
     print(f"🧬 GA Parametreler:")
     print(f"   Ürün Sayısı: {n_urun}")
     print(f"   Population: {population_size}")
