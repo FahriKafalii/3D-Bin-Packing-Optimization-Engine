@@ -27,13 +27,13 @@ from dataclasses import dataclass, field
 from typing import List, Optional, Set, Tuple
 
 from .packing import (
-    pack_maximal_rectangles,
     compact_pallet,
     _try_add_item,
     _save_pallet_state,
     _restore_pallet_state,
     _rebuild_pallet_state,
 )
+from .packing_first_fit import pack_maximal_rectangles_first_fit
 
 logger = logging.getLogger(__name__)
 
@@ -306,13 +306,13 @@ def merge_and_repack_v2(
 
         # ── Packing ──────────────────────────────────────────────────
         try:
-            new_pallets = pack_maximal_rectangles(
+            new_pallets = pack_maximal_rectangles_first_fit(
                 urunler_order,
                 palet_cfg,
                 min_support_ratio=min_support_ratio,
             )
         except ValueError as exc:
-            logger.warning("[MR] pack_maximal_rectangles raised ValueError: %s", exc)
+            logger.warning("[MR] pack_maximal_rectangles_first_fit raised ValueError: %s", exc)
             continue
 
         # ── Kompaksiyon ───────────────────────────────────────────────
