@@ -21,7 +21,8 @@ import logging
 import math
 import os
 from dataclasses import dataclass
-from .packing import pack_maximal_rectangles, snap_z, compute_corner_support
+from .packing_first_fit import pack_maximal_rectangles_first_fit
+from .packing import snap_z, compute_corner_support
 from ..utils.helpers import urun_hacmi
 from ..models.container import PaletConfig
 
@@ -62,6 +63,11 @@ MIN_UTIL    = 0.45    # Eşik doluluk oranı  [0..1]
 # Ceza büyüklükleri – doluluk türevi (gerçek fitness birimiyle uyumlu)
 W_UNDERFILL = 8000    # (MIN_UTIL - u)^2 çarpanı  [5000–15000]
 W_VARIANCE  = 3000    # Palet doluluk varyansı çarpanı  [1000–5000]
+
+# AMAZON-VARI DENGESİZLİK ÖDÜLÜ
+# Paletlerin doluluk oranlarının karesini alarak, dengesiz dağılımı (örn: %95, %5)
+# dengeli dağılıma (örn: %50, %50) tercih etmesini sağlarız.
+W_DENSITY_SQUARE = 5000
 
 # ---------------------------------------------------------------
 # KOMPAKSIYON METRİKLERİ  (fragmantasyon + dikey düzleme)
@@ -194,7 +200,8 @@ def calculate_center_of_gravity(items):
         center_y = item['y'] + item['W'] / 2
         center_z = item['z'] + item['H'] / 2
         
-        weight = item['urun'].agirlik
+        weight = getattr(item['urun'], 'agirlik', 1.0)
+        if weight <= 0: weight = 1.0
         
         weighted_x += center_x * weight
         weighted_y += center_y * weight
@@ -209,6 +216,35 @@ def calculate_center_of_gravity(items):
     cog_z = weighted_z / total_weight
     
     return cog_x, cog_y, cog_z
+
+def calculate_cog_penalty(pallet, pallet_length, pallet_width):
+    """
+    Paletin ağırlık merkezini (Center of Gravity) hesaplar ve 
+    ideal merkezden sapmaya göre bir ceza puanı üretir.
+    """
+    if not pallet['items'] or pallet.get('weight', 0) == 0:
+        return 0.0
+
+    cog_x, cog_y, cog_z = calculate_center_of_gravity(pallet['items'])
+    if cog_x == 0 and cog_y == 0 and cog_z == 0:
+        return 0.0
+
+    # İdeal Merkez Koordinatları (Paletin tam ortası)
+    ideal_x = pallet_length / 2.0
+    ideal_y = pallet_width / 2.0
+
+    # Sapma Oranları (0 ile 1 arası)
+    dev_x = abs(cog_x - ideal_x) / ideal_x if ideal_x > 0 else 0
+    dev_y = abs(cog_y - ideal_y) / ideal_y if ideal_y > 0 else 0
+
+    # Ceza Hesaplama
+    # 1. Yatay Denge Cezası (Merkezden uzaklaştıkça ceza artar)
+    xy_penalty = (dev_x**2 + dev_y**2) * 5000  
+    
+    # 2. Dikey Denge Cezası (Ağırlık merkezi yukarı çıktıkça ceza artar)
+    z_penalty = cog_z * 10  
+
+    return xy_penalty + z_penalty
 
 
 def check_stacking_violations(items):
@@ -526,9 +562,9 @@ def evaluate_fitness(chromosome, palet_cfg: PaletConfig) -> FitnessResult:
     global _cavity_eval_counter
     weights = get_weights()
     
-    # 1. Yerleştirme Motorunu Çalıştır (Maximal Rectangles + Auto-Orientation)
+    # 1. Yerleştirme Motorunu Çalıştır (Maximal Rectangles + Auto-Orientation + First-Fit)
     # Enable debug_support if DEBUG_SUPPORT=1 env var is set
-    pallets = pack_maximal_rectangles(chromosome.urunler, palet_cfg, debug_support=DEBUG_SUPPORT)
+    pallets = pack_maximal_rectangles_first_fit(chromosome.urunler, palet_cfg, debug_support=DEBUG_SUPPORT)
     
     if not pallets:
         chromosome.fitness = -1e9
@@ -565,6 +601,11 @@ def evaluate_fitness(chromosome, palet_cfg: PaletConfig) -> FitnessResult:
         p_vol = sum(i["L"] * i["W"] * i["H"] for i in pallet["items"])
         fill_ratio = p_vol / palet_cfg.volume
         total_fill_ratio += fill_ratio
+        
+        # AMAZON-VARI DENGESİZLİK ÖDÜLÜ:
+        # Doluluk oranının karesini alarak, bir paleti ağzına kadar doldurmayı
+        # iki paleti yarım doldurmaya tercih etmesini sağlıyoruz.
+        fitness_score += W_DENSITY_SQUARE * (fill_ratio ** 2)
 
     avg_doluluk = total_fill_ratio / P_GA if P_GA > 0 else 0.0
     fitness_score += weights["w_volume"] * avg_doluluk
@@ -589,17 +630,18 @@ def evaluate_fitness(chromosome, palet_cfg: PaletConfig) -> FitnessResult:
             )
 
     # Varyans: paletler arası doluluk tutarsızlığını cezalandır
-    if len(pallet_utils) > 1:
-        mean_u = sum(pallet_utils) / len(pallet_utils)
-        variance = sum((u - mean_u) ** 2 for u in pallet_utils) / len(pallet_utils)
-        fitness_score -= W_VARIANCE * variance
-        if logger.isEnabledFor(logging.DEBUG):
-            logger.debug(
-                "[FITNESS] Doluluk varyansı=%.4f | variance_penalty=%.0f",
-                variance, W_VARIANCE * variance,
-            )
+    # AMAZON-VARI İÇİN İPTAL EDİLDİ: Artık varyans (dengesizlik) istiyoruz!
+    # if len(pallet_utils) > 1:
+    #     mean_u = sum(pallet_utils) / len(pallet_utils)
+    #     variance = sum((u - mean_u) ** 2 for u in pallet_utils) / len(pallet_utils)
+    #     fitness_score -= W_VARIANCE * variance
+    #     if logger.isEnabledFor(logging.DEBUG):
+    #         logger.debug(
+    #             "[FITNESS] Doluluk varyansı=%.4f | variance_penalty=%.0f",
+    #             variance, W_VARIANCE * variance,
+    #         )
 
-    # --- KIRMIZI ÇİZGİ: FİZİKSEL KISIT İHLALLERİ ---
+        # --- KIRMIZI ÇİZGİ: FİZİKSEL KISIT İHLALLERİ ---
     for pallet in pallets:
         if pallet["weight"] > palet_cfg.max_weight:
             fitness_score -= weights["w_weight_violation"]
@@ -612,14 +654,9 @@ def evaluate_fitness(chromosome, palet_cfg: PaletConfig) -> FitnessResult:
                 fitness_score -= weights["w_physical_violation"]
                 has_violation = True
         
-        if weights["w_cog_penalty"] > 0:
-            cog_x, cog_y, cog_z = calculate_center_of_gravity(pallet["items"])
-            palet_center_x = palet_cfg.length / 2
-            palet_center_y = palet_cfg.width / 2
-            distance = ((cog_x - palet_center_x)**2 + (cog_y - palet_center_y)**2)**0.5
-            if distance > 10:
-                penalty = int((distance - 10) / 10)
-                fitness_score -= weights["w_cog_penalty"] * penalty
+        # Ağırlık Merkezi (Center of Gravity) Cezası
+        cog_penalty = calculate_cog_penalty(pallet, palet_cfg.length, palet_cfg.width)
+        fitness_score -= cog_penalty
         
         stacking_violations = check_stacking_violations(pallet["items"])
         if stacking_violations > 0:
