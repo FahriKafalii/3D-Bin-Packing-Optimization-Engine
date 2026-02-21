@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 # Z_GRID: Katman hizalaması için grid adımı (cm).
 # Ürünlerin z konumları bu değerin katlarına yuvarlanır (mümkünse).
 # Düşürüldükçe daha hassas katman hizalaması sağlar (ama daha yavaş değil).
-Z_GRID   = 5.0    # cm – konfig için bu sabitini değiştirin
+Z_GRID   = 0.1    # cm – konfig için bu sabitini değiştirin
 EPS_Z    = 1e-6   # z-snap için float hassasiyet toleransı
 
 # Yeni palet açma log'u için referans doluluk eşiği
@@ -503,68 +503,81 @@ def _rebuild_layer_map(pallet):
         pallet['layer_map'].setdefault(key, []).append(it)
 
 
-def compact_pallet(pallet, palet_cfg, min_support_ratio=0.40):
+def compact_pallet(pallet, palet_cfg, min_support_ratio=0.40, max_iterations=5):
     """
-    İki geçişli kompaksiyon.
+    İteratif kompaksiyon.
 
     Geçiş 1 — Yerçekimi: her kutuyu destekli kalacağı en düşük z'ye indir.
     Geçiş 2 — Orjin: her kutuyu x=0, sonra y=0 yönüne doğru it.
 
     İşlem sırası aşağıdan yukarıya doğrudur; başakı kutular yerinde kalır.
-    O(n²) — 200 ürüne kadar kabul edilebilir performans.
+    Hiçbir kutu hareket etmeyene kadar (veya max_iterations) tekrarlar.
     """
     items = pallet['items']
     if not items:
         return pallet
 
-    # ── GEÇİŞ 1: Yerçekimi ───────────────────────────────────────────────
-    for item in sorted(items, key=lambda i: i['z']):
-        others = [o for o in items if o is not item]
-        cands = {0.0}
-        for o in others:
-            top = round(o['z'] + o['H'], 6)
-            if top < item['z'] - 1e-6:
-                cands.add(top)
-        for cz in sorted(cands):
-            if cz >= item['z'] - 1e-6:
-                break
-            if _can_place_at(item['x'], item['y'], cz,
-                             item['L'], item['W'], item['H'],
-                             others, palet_cfg, min_support_ratio):
-                item['z'] = cz
-                break
+    for iteration in range(max_iterations):
+        moved_any = False
+        
+        # ── GEÇİŞ 1: Yerçekimi ───────────────────────────────────────────────
+        for item in sorted(items, key=lambda i: i['z']):
+            others = [o for o in items if o is not item]
+            cands = {0.0}
+            for o in others:
+                top = round(o['z'] + o['H'], 6)
+                if top < item['z'] - 1e-6:
+                    cands.add(top)
+            
+            for cz in sorted(cands):
+                if cz >= item['z'] - 1e-6:
+                    break
+                if _can_place_at(item['x'], item['y'], cz,
+                                 item['L'], item['W'], item['H'],
+                                 others, palet_cfg, min_support_ratio):
+                    if abs(item['z'] - cz) > 1e-6:
+                        item['z'] = cz
+                        moved_any = True
+                    break
 
-    # ── GEÇİŞ 2: Orjin ───────────────────────────────────────────────
-    for item in sorted(items, key=lambda i: i['x'] + i['y']):
-        others = [o for o in items if o is not item]
-        # -X yönü
-        cands_x = {0.0}
-        for o in others:
-            rx = round(o['x'] + o['L'], 6)
-            if rx < item['x'] - 1e-6:
-                cands_x.add(rx)
-        for cx in sorted(cands_x):
-            if cx >= item['x'] - 1e-6:
-                break
-            if _can_place_at(cx, item['y'], item['z'],
-                             item['L'], item['W'], item['H'],
-                             others, palet_cfg, min_support_ratio):
-                item['x'] = cx
-                break
-        # -Y yönü
-        cands_y = {0.0}
-        for o in others:
-            ry = round(o['y'] + o['W'], 6)
-            if ry < item['y'] - 1e-6:
-                cands_y.add(ry)
-        for cy in sorted(cands_y):
-            if cy >= item['y'] - 1e-6:
-                break
-            if _can_place_at(item['x'], cy, item['z'],
-                             item['L'], item['W'], item['H'],
-                             others, palet_cfg, min_support_ratio):
-                item['y'] = cy
-                break
+        # ── GEÇİŞ 2: Orjin ───────────────────────────────────────────────
+        for item in sorted(items, key=lambda i: i['x'] + i['y']):
+            others = [o for o in items if o is not item]
+            # -X yönü
+            cands_x = {0.0}
+            for o in others:
+                rx = round(o['x'] + o['L'], 6)
+                if rx < item['x'] - 1e-6:
+                    cands_x.add(rx)
+            for cx in sorted(cands_x):
+                if cx >= item['x'] - 1e-6:
+                    break
+                if _can_place_at(cx, item['y'], item['z'],
+                                 item['L'], item['W'], item['H'],
+                                 others, palet_cfg, min_support_ratio):
+                    if abs(item['x'] - cx) > 1e-6:
+                        item['x'] = cx
+                        moved_any = True
+                    break
+            # -Y yönü
+            cands_y = {0.0}
+            for o in others:
+                ry = round(o['y'] + o['W'], 6)
+                if ry < item['y'] - 1e-6:
+                    cands_y.add(ry)
+            for cy in sorted(cands_y):
+                if cy >= item['y'] - 1e-6:
+                    break
+                if _can_place_at(item['x'], cy, item['z'],
+                                 item['L'], item['W'], item['H'],
+                                 others, palet_cfg, min_support_ratio):
+                    if abs(item['y'] - cy) > 1e-6:
+                        item['y'] = cy
+                        moved_any = True
+                    break
+                    
+        if not moved_any:
+            break
 
     _rebuild_layer_map(pallet)
     return pallet
