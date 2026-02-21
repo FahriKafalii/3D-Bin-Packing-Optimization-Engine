@@ -61,7 +61,16 @@ class Chromosome:
         return yeni
 
     def __repr__(self):
+        _fitness  = self.fitness          if self.fitness          is not None else 0.0
+        _palet    = self.palet_sayisi     if self.palet_sayisi     is not None else 0
+        _doluluk  = self.ortalama_doluluk if self.ortalama_doluluk is not None else 0.0
+        _unplaced = self.yerlesmemis_urun_sayisi if self.yerlesmemis_urun_sayisi is not None else 0
         return (
-            f"<Chromosome fitness={self.fitness:.2f} "
-            f"palet={self.palet_sayisi} doluluk={self.ortalama_doluluk:.2f}>"
+            f"Chromosome("
+            f"n={self.n}, "
+            f"fitness={_fitness:.4f}, "
+            f"palet_sayisi={_palet}, "
+            f"doluluk={_doluluk:.2%}, "
+            f"unplaced={_unplaced}"
+            f")"
         )
