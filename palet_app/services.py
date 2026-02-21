@@ -16,7 +16,8 @@ from src.core.single_pallet import (
     generate_grid_placement,
     DEFAULT_SINGLE_THRESHOLD,
 )
-from src.core.packing import pack_maximal_rectangles, merge_and_repack, compact_pallet
+from src.core.packing import merge_and_repack, compact_pallet
+from src.core.packing_first_fit import pack_maximal_rectangles_first_fit
 from src.core.genetic_algorithm import run_ga
 from src.core.mix_pallet import mix_palet_yerlestirme_main
 from src.utils.helpers import urun_hacmi, group_products_smart
@@ -187,7 +188,7 @@ def chromosome_to_palets(chromosome, palet_cfg, optimization, baslangic_id):
         5. Django Palet nesnelerine dönüştür ve kaydet
     """
     siralanmis_urunler = [chromosome.urunler[i] for i in chromosome.sira_gen]
-    pallets = pack_maximal_rectangles(siralanmis_urunler, palet_cfg)
+    pallets = pack_maximal_rectangles_first_fit(siralanmis_urunler, palet_cfg)
 
     # ── Kompaksiyon (gravity + origin) ────────────────────────────────
     for p in pallets:
