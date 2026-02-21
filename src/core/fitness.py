@@ -117,14 +117,14 @@ class AdaptiveWeights:
         # KURAL 1: Palet sayısı fazlaysa → pallet_count artır
         if palet_sayisi > theo_min_pallets + 2:
             self.w_pallet_count = min(self.w_pallet_count * 1.1, self.MAX_PALLET_COUNT)
-            print(f"  🔧 Palet sayısı yüksek → w_pallet_count artırıldı: {self.w_pallet_count:.0f}")
+            print(f"  Palet sayisi yuksek -> w_pallet_count artirildi: {self.w_pallet_count:.0f}")
         elif palet_sayisi <= theo_min_pallets:
             self.w_pallet_count = max(self.w_pallet_count * 0.95, 10000)
             
         # KURAL 2: Doluluk düşükse → volume weight artır
         if doluluk < 0.65:
             self.w_volume = min(self.w_volume * 1.1, self.MAX_VOLUME)
-            print(f"  🔧 Doluluk düşük (%{doluluk*100:.1f}) → w_volume artırıldı: {self.w_volume:.0f}")
+            print(f"  Doluluk dusuk (%{doluluk*100:.1f}) -> w_volume artirildi: {self.w_volume:.0f}")
         elif doluluk > 0.85:
             self.w_volume = max(self.w_volume * 0.98, 15000)
             

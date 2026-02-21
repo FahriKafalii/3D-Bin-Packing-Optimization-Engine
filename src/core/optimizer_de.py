@@ -743,9 +743,9 @@ def run_de(
             generations = 50
     
     print("\n" + "="*70)
-    print("🔬 ADVANCED DIFFERENTIAL EVOLUTION OPTIMIZER V2.0")
+    print("ADVANCED DIFFERENTIAL EVOLUTION OPTIMIZER V2.0")
     print("="*70)
-    print(f"📊 Configuration:")
+    print(f"Configuration:")
     print(f"   Items: {n_items}")
     print(f"   Population: {population_size} (upgraded: max(60, 0.8*N))")
     print(f"   Generations: {generations}")
@@ -764,11 +764,11 @@ def run_de(
     cache = FitnessCache()
     
     # BIASED INITIALIZATION
-    print("🌱 Initializing population with volume-biased strategy...")
+    print("Initializing population with volume-biased strategy...")
     population = create_biased_population(n_items, population_size, urunler, use_rotations)
     
     # Evaluate initial population
-    print("📈 Evaluating initial population...")
+    print("Evaluating initial population...")
     for ind in population:
         evaluate_de_individual(ind, urunler, palet_cfg, cache)
     
@@ -776,7 +776,7 @@ def run_de(
     population.sort(key=lambda x: x.fitness, reverse=True)
     best_individual = population[0].copy()
     
-    print(f"✅ Initial best fitness: {best_individual.fitness:.2f}")
+    print(f"Initial best fitness: {best_individual.fitness:.2f}")
     print(f"   Pallets: {best_individual.palet_sayisi}, Utilization: {best_individual.ortalama_doluluk*100:.1f}%\n")
     
     # History tracking
@@ -821,7 +821,7 @@ def run_de(
         
         # DIVERSITY INJECTION: If no improvement for 8 generations
         if gen - last_improvement_gen >= 8:
-            print(f"🌊 Generation {gen+1}: Diversity injection (stagnant for {gen - last_improvement_gen} gens)...")
+            print(f"Generation {gen+1}: Diversity injection (stagnant for {gen - last_improvement_gen} gens)...")
             
             # Reinitialize worst 25% using biased initialization
             n_reinit = max(1, int(population_size * 0.25))
@@ -849,7 +849,7 @@ def run_de(
         
         # ELITE REPAIR: Every 5 generations (now with 50 mutations)
         if (gen + 1) % 5 == 0:
-            print(f"🔧 Generation {gen+1}: Applying enhanced elite repair (50 mutations)...")
+            print(f"Generation {gen+1}: Applying enhanced elite repair (50 mutations)...")
             apply_elite_repair_to_population(population, urunler, palet_cfg, cache, n_elite=3)
             population.sort(key=lambda x: x.fitness, reverse=True)
             
@@ -872,20 +872,20 @@ def run_de(
         
         # Progress report
         if (gen + 1) % 10 == 0 or gen == 0:
-            print(f"📊 Generation {gen+1}/{generations}:")
+            print(f"Generation {gen+1}/{generations}:")
             print(f"   Best Fitness: {current_best.fitness:.2f}")
             print(f"   Pallets: {current_best.palet_sayisi}, Utilization: {current_best.ortalama_doluluk*100:.1f}%")
             print(f"   Improvements: {improvements}, Cache Hit Rate: {cache.get_hit_rate()*100:.1f}%")
     
     # Final report
     print("\n" + "="*70)
-    print("🏆 OPTIMIZATION COMPLETE")
+    print("OPTIMIZATION COMPLETE")
     print("="*70)
-    print(f"✅ Best Solution:")
+    print(f"Best Solution:")
     print(f"   Fitness: {best_individual.fitness:.2f}")
     print(f"   Pallets Used: {best_individual.palet_sayisi}")
     print(f"   Average Utilization: {best_individual.ortalama_doluluk*100:.1f}%")
-    print(f"\n📊 Cache Statistics:")
+    print(f"\nCache Statistics:")
     print(f"   Hits: {cache.hits}, Misses: {cache.misses}")
     print(f"   Hit Rate: {cache.get_hit_rate()*100:.1f}%")
     print(f"   Total Evaluations Saved: {cache.hits}")

@@ -182,7 +182,7 @@ def run_ga(urunler, palet_cfg: PaletConfig, population_size=None, generations=No
         generations = 100
         mutation_rate = 0.4
         tournament_k = 2
-        print(f"⚡ LIGHT & FAST MODE (Auto-Orientation): n_urun={n_urun} > 100")
+        print(f"LIGHT & FAST MODE (Auto-Orientation): n_urun={n_urun} > 100")
         print(f"   Parameters: pop=50, gen=100, mut=0.4, tournament_k=2")
     else:
         if population_size is None:
@@ -200,7 +200,7 @@ def run_ga(urunler, palet_cfg: PaletConfig, population_size=None, generations=No
     elitism         = min(elitism, population_size - 1)
     # ─────────────────────────────────────────────────────────────────────
 
-    print(f"🧬 GA Parametreler:")
+    print(f"GA Parametreler:")
     print(f"   Ürün Sayısı: {n_urun}")
     print(f"   Population: {population_size}")
     print(f"   Generations: {generations}")
@@ -216,16 +216,16 @@ def run_ga(urunler, palet_cfg: PaletConfig, population_size=None, generations=No
     population: List[Chromosome] = []
     
     num_height_seeds = max(1, int(population_size * 0.40))
-    print(f"📏 Creating {num_height_seeds} HEIGHT-sorted seeds (anti-staircase effect)...")
+    print(f"Creating {num_height_seeds} HEIGHT-sorted seeds (anti-staircase effect)...")
     for _ in range(num_height_seeds):
         population.append(create_height_sorted_chromosome(urunler))
     
     num_random = population_size - len(population)
-    print(f"🎲 Creating {num_random} RANDOM individuals for AI discovery...")
+    print(f"Creating {num_random} RANDOM individuals for AI discovery...")
     for _ in range(num_random):
         population.append(Chromosome(urunler=urunler))
     
-    print(f"✅ Total population: {len(population)} (Height: {num_height_seeds}, Random: {num_random})")
+    print(f"Total population: {len(population)} (Height: {num_height_seeds}, Random: {num_random})")
 
     # İlk fitness hesaplaması
     for c in population:
@@ -273,7 +273,7 @@ def run_ga(urunler, palet_cfg: PaletConfig, population_size=None, generations=No
             if best_local.fitness > original_fitness:
                 population[0] = best_local
                 current_best = best_local
-                print(f"  🔍 Height-Aware Local Search improved: {original_fitness:.2f} → {best_local.fitness:.2f}")
+                print(f"  Height-Aware Local Search improved: {original_fitness:.2f} -> {best_local.fitness:.2f}")
         
         # ANTI-STAGNATION
         if current_best.fitness > best_fitness_tracker:
@@ -284,7 +284,7 @@ def run_ga(urunler, palet_cfg: PaletConfig, population_size=None, generations=No
         
         # GENETİK ŞOK
         if generations_without_improvement >= 20 and gen < generations - 5:
-            print(f"  💥 GENETİK ŞOK! {generations_without_improvement} nesil iyileşme yok")
+            print(f"  GENETIK SOK: {generations_without_improvement} nesil iyilesme yok")
             num_to_replace = int(population_size * 0.5)
             half = num_to_replace // 2
             
@@ -303,7 +303,7 @@ def run_ga(urunler, palet_cfg: PaletConfig, population_size=None, generations=No
                     evaluate_fitness(population[idx], palet_cfg)
                     idx += 1
             
-            print(f"  ✅ {num_to_replace} sıralı tohum eklendi ({half} hacim, {remaining} ağırlık)")
+            print(f"  {num_to_replace} sirali tohum eklendi ({half} hacim, {remaining} agirlik)")
             generations_without_improvement = 0
         
         # ADAPTIVE WEIGHTS

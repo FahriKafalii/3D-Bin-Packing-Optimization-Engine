@@ -100,7 +100,7 @@ class MergeRepackMetrics:
         delta_util = self.util_after - self.util_before
         delta_p    = self.pallets_before - self.pallets_after
         return (
-            f"[Merge&Repack] ✅ KABUL — "
+            f"[Merge&Repack] KABUL — "
             f"Palet: {self.pallets_before}→{self.pallets_after} "
             f"(Δ{delta_p:+d}) | "
             f"Doluluk: {self.util_before:.1%}→{self.util_after:.1%} "
@@ -437,7 +437,7 @@ class MixMergeMetrics:
         dp = self.pallets_before - self.pallets_after
         du = self.avg_util_after - self.avg_util_before
         return (
-            f"[MixMerge] ✅ KABUL — "
+            f"[MixMerge] KABUL — "
             f"Palet: {self.pallets_before}→{self.pallets_after} (Δ{dp:+d}) | "
             f"Avg: {self.avg_util_before:.1%}→{self.avg_util_after:.1%} (Δ{du:+.1%}) | "
             f"Min: {self.min_util_before:.1%}→{self.min_util_after:.1%} | "
@@ -448,7 +448,7 @@ class MixMergeMetrics:
     def debug_log(self) -> None:
         logger.debug("[MixMerge] %s", self.summary())
         for log in self.iterations:
-            status = "✅ OK" if log.success else "❌ FAIL"
+            status = "OK" if log.success else "FAIL"
             logger.debug(
                 "[MixMerge] iter=%-2d  src_idx=%-2d  util=%.1%%  "
                 "items=%d  moved=%d  %s  %s",
@@ -665,7 +665,7 @@ def merge_and_repack_mix(
 
         if success:
             logger.info(
-                "[MixMerge] iter=%d  ✅ Palet kaldırıldı (src_util=%.1%% → %d item taşındı). "
+                "[MixMerge] iter=%d  Palet kaldirildi (src_util=%.1%% -> %d item tasindi). "
                 "Kalan: %d",
                 iteration, src_util * 100, items_moved, len(working) - 1,
             )
@@ -674,7 +674,7 @@ def merge_and_repack_mix(
             failed_src_ids.clear()   # Yeni durum → eski "failed" bilgisi geçersiz
         else:
             logger.debug(
-                "[MixMerge] iter=%d  ❌ Birleştirme başarısız (src_util=%.1%% items_moved=%d/%d).",
+                "[MixMerge] iter=%d  Birlestirme basarisiz (src_util=%.1%% items_moved=%d/%d).",
                 iteration, src_util * 100, items_moved, len(src.get('items', [])),
             )
             failed_src_ids.add(id(src))

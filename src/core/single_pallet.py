@@ -408,7 +408,7 @@ def simulate_single_pallet(urun_listesi, palet_cfg: PaletConfig):
         else:
             constraint = "perfectly balanced"
         reason = (
-            f"✅ ONAYLANDI | Efficiency: {efficiency*100:.1f}% "
+            f"ONAYLANDI | Efficiency: {efficiency*100:.1f}% "
             f">= dynamic_threshold {adaptive_threshold*100:.1f}% ({constraint}) | "
             f"hysteresis_margin: {hysteresis_margin:+.2f}pp | "
             f"base_fill: {max_fill*100:.1f}% [{best_orient}, base_count/layer={base_count}] | "
@@ -417,13 +417,13 @@ def simulate_single_pallet(urun_listesi, palet_cfg: PaletConfig):
         )
     else:
         reason = (
-            f"❌ REDDEDİLDİ | Efficiency: {efficiency*100:.1f}% "
+            f"REDDEDILDI | Efficiency: {efficiency*100:.1f}% "
             f"< dynamic_threshold {adaptive_threshold*100:.1f}% | "
             f"hysteresis_margin: {hysteresis_margin:+.2f}pp | "
             f"base_fill: {max_fill*100:.1f}% [{best_orient}, base_count/layer={base_count}] | "
             f"full_pallet_count: {full_pallet_count} | "
             f"Capacity: {capacity} items | Layout: {layout_desc} | "
-            f"⚠️ Eşik [{MIN_SINGLE_THRESHOLD*100:.0f}%–{MAX_SINGLE_THRESHOLD*100:.0f}%] aralığında (base_fill bazlı)"
+            f"Esik [{MIN_SINGLE_THRESHOLD*100:.0f}%-{MAX_SINGLE_THRESHOLD*100:.0f}%] araliginda (base_fill bazli)"
         )
 
     return {
@@ -519,7 +519,7 @@ def _run_sanity_checks():
 
     print()
     if FAIL:
-        print(f"⚠️  {len(FAIL)} test BAŞARISIZ: {FAIL}")
+        print(f"UYARI: {len(FAIL)} test BASARISIZ: {FAIL}")
     else:
-        print("✅ Tüm sanity check'ler geçti.\n")
+        print("Tum sanity check'ler gecti.\n")
     return len(FAIL) == 0

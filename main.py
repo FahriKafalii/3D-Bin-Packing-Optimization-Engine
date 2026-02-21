@@ -51,7 +51,7 @@ def run_optimization_standalone(json_path, algorithm='genetic', output_dir='outp
     json_data = load_json_file(json_path)
     palet_cfg, all_products = parse_json_input(json_data)
     
-    print(f"\n📦 Konteyner: {palet_cfg.length}×{palet_cfg.width}×{palet_cfg.height} cm")
+    print(f"\nKonteyner: {palet_cfg.length}x{palet_cfg.width}x{palet_cfg.height} cm")
     print(f"   Max Ağırlık: {palet_cfg.max_weight} kg")
     print(f"   Toplam Ürün: {len(all_products)}")
     
@@ -196,7 +196,7 @@ def run_optimization_standalone(json_path, algorithm='genetic', output_dir='outp
         img_path = os.path.join(output_dir, 'images', f'palet_{idx + 1}.png')
         with open(img_path, 'wb') as f:
             f.write(buf.read())
-        print(f"  📸 {img_path}")
+        print(f"  [IMG] {img_path}")
     
     # JSON rapor
     report = {
@@ -222,9 +222,9 @@ def run_optimization_standalone(json_path, algorithm='genetic', output_dir='outp
     report_path = os.path.join(output_dir, 'reports', 'optimization_result.json')
     with open(report_path, 'w', encoding='utf-8') as f:
         json.dump(report, f, indent=2, ensure_ascii=False)
-    print(f"  📊 {report_path}")
+    print(f"  [RAPOR] {report_path}")
     
-    print("\n✅ Optimizasyon tamamlandı.")
+    print("\nOptimizasyon tamamlandi.")
     return report
 
 

@@ -31,7 +31,7 @@ Z_GRID   = 0.1    # cm – konfig için bu sabitini değiştirin
 EPS_Z    = 1e-6   # z-snap için float hassasiyet toleransı
 
 # Yeni palet açma log'u için referans doluluk eşiği
-_LOG_MIN_UTIL = 0.45   # Bu seviyenin altında palet kapanırsa ⚠️ underfill uyarısı verilir
+_LOG_MIN_UTIL = 0.45   # Bu seviyenin altinda palet kapanirsa underfill uyarisi verilir
 
 # ---------------------------------------------------------------
 # KÖŞE DESTEK (CORNER SUPPORT) KONFIGÜRASYONU
@@ -721,7 +721,7 @@ def pack_maximal_rectangles(urunler, palet_cfg, min_support_ratio=0.40, debug_su
                 if logger.isEnabledFor(logging.DEBUG):
                     _cur_vol  = sum(i["L"]*i["W"]*i["H"] for i in current_pallet['items'])
                     _cur_util = _cur_vol / palet_cfg.volume
-                    _warn = " ⚠️ underfill" if _cur_util < _LOG_MIN_UTIL else ""
+                    _warn = " underfill" if _cur_util < _LOG_MIN_UTIL else ""
                     logger.debug(
                         "[PALLET OPEN] reason=weight_overflow | palet=%d util=%.1f%%%s "
                         "| item=%s (%.1f kg)",
@@ -821,7 +821,7 @@ def pack_maximal_rectangles(urunler, palet_cfg, min_support_ratio=0.40, debug_su
                 if logger.isEnabledFor(logging.DEBUG):
                     _cur_vol  = sum(i["L"]*i["W"]*i["H"] for i in current_pallet['items'])
                     _cur_util = _cur_vol / palet_cfg.volume
-                    _warn = " ⚠️ underfill" if _cur_util < _LOG_MIN_UTIL else ""
+                    _warn = " underfill" if _cur_util < _LOG_MIN_UTIL else ""
                     logger.debug(
                         "[PALLET OPEN] reason=no_fit | palet=%d util=%.1f%%%s | item=%s",
                         len(pallets) + 1, _cur_util * 100, _warn,

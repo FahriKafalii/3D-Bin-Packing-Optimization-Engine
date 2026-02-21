@@ -109,7 +109,7 @@ def single_palet_yerlestirme(urunler, container_info, optimization=None):
                 remainder_fill_ratio = (remainder * item_volume) / pallet_volume if remainder > 0 else 0
                 create_partial = (remainder_fill_ratio >= DEFAULT_SINGLE_THRESHOLD)
                 
-                print(f"  -> ✅ ONAYLANDI. {sim_result['reason']}")
+                print(f"  -> ONAYLANDI. {sim_result['reason']}")
                 print(f"  -> Efficiency: {efficiency*100:.1f}% | Capacity: {capacity} items/pallet")
                 print(f"  -> Stock: {total_qty} → {num_full_pallets} full pallet(s)")
                 
@@ -117,7 +117,7 @@ def single_palet_yerlestirme(urunler, container_info, optimization=None):
                     if create_partial:
                         print(f"  -> + 1 partial pallet ({remainder} items, fill: {remainder_fill_ratio*100:.1f}%)")
                     else:
-                        print(f"  -> ⚠️  {remainder} remainder items → Mix Pool")
+                        print(f"  -> {remainder} remainder items -> Mix Pool")
             else:
                 num_full_pallets = 0
                 remainder = total_qty
@@ -125,9 +125,9 @@ def single_palet_yerlestirme(urunler, container_info, optimization=None):
                 create_partial = (partial_fill_ratio >= DEFAULT_SINGLE_THRESHOLD)
                 
                 if create_partial:
-                    print(f"  -> ✅ ONAYLANDI (Partial). Fill: {partial_fill_ratio*100:.1f}%")
+                    print(f"  -> ONAYLANDI (Partial). Fill: {partial_fill_ratio*100:.1f}%")
                 else:
-                    print(f"  -> ⚠️  REJECTED. Fill: {partial_fill_ratio*100:.1f}% < {DEFAULT_SINGLE_THRESHOLD:.0%}")
+                    print(f"  -> REJECTED. Fill: {partial_fill_ratio*100:.1f}% < {DEFAULT_SINGLE_THRESHOLD:.0%}")
                     mix_pool.extend(group_items)
                     continue
             
@@ -155,9 +155,9 @@ def single_palet_yerlestirme(urunler, container_info, optimization=None):
             elif remainder > 0:
                 leftovers = group_items[-remainder:]
                 mix_pool.extend(leftovers)
-                print(f"  -> ⚠️  {remainder} items sent to Mix Pool")
+                print(f"  -> {remainder} items sent to Mix Pool")
         else:
-            print(f"  -> ❌ REDDEDİLDİ. {sim_result['reason']}")
+            print(f"  -> REDDEDILDI. {sim_result['reason']}")
             mix_pool.extend(group_items)
     
     print(f"--- Single Bitti. {len(single_pallets)} palet. Mix Havuzu: {len(mix_pool)} ürün. ---")
