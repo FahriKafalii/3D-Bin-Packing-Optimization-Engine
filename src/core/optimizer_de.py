@@ -28,7 +28,8 @@ import os
 from typing import List, Tuple, Dict, Optional
 from dataclasses import dataclass
 
-from .packing import pack_maximal_rectangles, compact_pallet, local_repair
+from .packing import compact_pallet, local_repair
+from .packing_first_fit import pack_maximal_rectangles_first_fit
 from .fitness import get_weights
 
 # Environment flag for support constraint verification
@@ -235,7 +236,7 @@ def evaluate_de_individual(
     
     # Pack using maximal rectangles (with Auto-Orientation & Gravity Constraint)
     # Enable debug_support if DEBUG_SUPPORT=1 env var is set
-    pallets = pack_maximal_rectangles(ordered_urunler, palet_cfg, debug_support=DEBUG_SUPPORT)
+    pallets = pack_maximal_rectangles_first_fit(ordered_urunler, palet_cfg, debug_support=DEBUG_SUPPORT)
     
     # COMPACTION PASS: her paleti kompaktleştir (gravity + origin)
     # Palet sayısını değiştirmez; isel doluluk artar.
