@@ -36,6 +36,7 @@ from ..models.container import PaletConfig
 #     eşik artarak MAX'a yaklaşır, gerçekten iyi dolmayan SKU kabul edilmez.
 #   - K katsayısı: eşik hassasiyetini kontrol eder.
 
+DEFAULT_SINGLE_THRESHOLD = 0.85  # Genel amaçlı tek-tip palet kabul eşiği
 BASE_SINGLE_THRESHOLD = 0.82   # Baz eşik (base_fill=0.70 için)
 K_FILL_SLOPE          = 0.35   # base_fill kayması başına eşik düşüş hızı
 MIN_SINGLE_THRESHOLD  = 0.70   # Mutlak alt sınır
