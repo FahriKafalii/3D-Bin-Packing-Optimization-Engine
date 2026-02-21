@@ -28,12 +28,23 @@ import os
 from typing import List, Tuple, Dict, Optional
 from dataclasses import dataclass
 
-from .packing import pack_maximal_rectangles
+from .packing import pack_maximal_rectangles, compact_pallet, local_repair
 from .fitness import get_weights
 
 # Environment flag for support constraint verification
 DEBUG_SUPPORT = os.getenv("DEBUG_SUPPORT") == "1"
 from ..utils.helpers import urun_hacmi
+
+# ====================================================================
+# DE FITNESS CONSTANTS  (lexicographic priority order)
+# ====================================================================
+# BIG_PALLET dominates W_UTIL: 1 fewer pallet always beats any util gain.
+# Guarantee:  BIG_PALLET(50k) > W_UTIL(1k) * 1.0(max possible util)  ✓
+# Unplaced items are handled by the packing engine itself (pack_maximal_rectangles
+# never drops items; it opens a new pallet instead).
+_DE_BIG_PALLET = 50_000   # Penalty per extra pallet above theo_min
+_DE_W_OPTIMAL  = 20_000   # Bonus when P_GA <= theo_min (matching/beating volumetric minimum)
+_DE_W_UTIL     =  1_000   # Secondary: avg utilisation bonus [0..1 scale]
 from ..models.container import PaletConfig
 from ..models.product import UrunData
 
@@ -226,6 +237,11 @@ def evaluate_de_individual(
     # Enable debug_support if DEBUG_SUPPORT=1 env var is set
     pallets = pack_maximal_rectangles(ordered_urunler, palet_cfg, debug_support=DEBUG_SUPPORT)
     
+    # COMPACTION PASS: her paleti kompaktleştir (gravity + origin)
+    # Palet sayısını değiştirmez; isel doluluk artar.
+    for p in pallets:
+        compact_pallet(p, palet_cfg)
+    
     if not pallets:
         individual.fitness = -1e9
         individual.palet_sayisi = 999
@@ -233,41 +249,51 @@ def evaluate_de_individual(
         cache.put(individual, individual.fitness, individual.palet_sayisi, individual.ortalama_doluluk)
         return
     
-    # Calculate fitness using existing fitness module logic
+    # ── DE LEXICOGRAPHIC FITNESS ───────────────────────────────────────
+    # Priority 1 (dominant): pallet count
+    # Priority 2 (secondary): avg utilisation
+    # Rule: 1 fewer pallet ALWAYS beats any utilisation improvement.
+    # --------------------------------------------------------------------
     weights = get_weights()
-    
+
     P_GA = len(pallets)
     total_load_vol = sum(urun_hacmi(u) for u in urunler)
     theo_min = max(1, math.ceil(total_load_vol / palet_cfg.volume))
-    
+
+    # Avg utilisation (global scalar — avoids per-pallet volume inflation)
+    total_item_vol = sum(
+        sum(i["L"] * i["W"] * i["H"] for i in p["items"])
+        for p in pallets
+    )
+    avg_doluluk = (total_item_vol / (P_GA * palet_cfg.volume)) if P_GA > 0 else 0.0
+
     fitness_score = 0.0
-    total_fill_ratio = 0.0
-    
-    # Pallet count penalty/bonus
-    if P_GA == theo_min:
-        fitness_score += weights["w_optimal_bonus"]
-    elif P_GA < theo_min:
-        fitness_score += weights["w_optimal_bonus"] * 2
+
+    # PRIORITY 1: Pallet count — lexicographically dominant term
+    if P_GA <= theo_min:
+        fitness_score += _DE_W_OPTIMAL          # Hitting or beating volumetric minimum
     else:
-        extra_pallets = P_GA - theo_min
-        fitness_score -= weights["w_pallet_count"] * extra_pallets
-    
-    # Volume utilization bonus
-    for pallet in pallets:
-        p_vol = sum(i["L"] * i["W"] * i["H"] for i in pallet["items"])
-        fill_ratio = p_vol / palet_cfg.volume
-        total_fill_ratio += fill_ratio
-        fitness_score += weights["w_volume"] * (fill_ratio ** 4)
-    
-    avg_doluluk = total_fill_ratio / P_GA if P_GA > 0 else 0.0
-    
-    # Constraint violations (simplified - full version in fitness.py)
+        fitness_score -= _DE_BIG_PALLET * (P_GA - theo_min)   # Hard penalty per extra pallet
+
+    # PRIORITY 2: Avg utilisation — secondary (capped well below 1 pallet)
+    fitness_score += _DE_W_UTIL * avg_doluluk
+
+    if DEBUG_SUPPORT:
+        print(
+            f"[DE FITNESS] P={P_GA} theo={theo_min} "
+            f"util={avg_doluluk:.2%} "
+            f"pallet_term={fitness_score - _DE_W_UTIL * avg_doluluk:.0f} "
+            f"util_term={_DE_W_UTIL * avg_doluluk:.0f} "
+            f"total={fitness_score:.0f}"
+        )
+
+    # Constraint violations (weight overload → infeasible)
     has_violation = False
     for pallet in pallets:
         if pallet["weight"] > palet_cfg.max_weight:
             fitness_score -= weights["w_weight_violation"]
             has_violation = True
-    
+
     if has_violation:
         fitness_score = min(fitness_score, -1e6)
     
@@ -597,7 +623,7 @@ def elite_repair(
                 # Insert at new position
                 current.priority_keys[j] = temp_val
         
-        # Evaluate
+        # Evaluate (compaction applied inside evaluate_de_individual)
         evaluate_de_individual(current, urunler, palet_cfg, cache, best.palet_sayisi)
         
         # Keep if improvement
