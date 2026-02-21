@@ -31,7 +31,10 @@ def parse_json_input(json_data):
     all_products = []
     for detail in json_data.get("details", []):
         p_info = detail.get("product", {})
-        qty_to_produce = detail.get("quantity", 0)
+        qty_to_produce = detail.get("quantity")
+        if qty_to_produce is None:
+            qty_to_produce = detail.get("package_quantity", 1)
+        qty_to_produce = int(qty_to_produce or 0)
         
         # Koli mi Adet mi kontrolü
         pkg_qty = detail.get("package_quantity")
@@ -48,7 +51,7 @@ def parse_json_input(json_data):
             final_agirlik = p_info.get("unit_weight", 0)
             is_pkg = False
 
-        for _ in range(int(qty_to_produce)):
+        for _ in range(qty_to_produce):
             u = UrunData(
                 urun_id=p_info.get("id"),
                 code=p_info.get("code"),
