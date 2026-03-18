@@ -41,7 +41,8 @@ from src.utils.parser import parse_json_input  # JSON -> (PaletConfig, List[Urun
 from src.core.genetic_algorithm import run_ga
 from src.core.optimizer_de import optimize_with_de
 from src.core.single_pallet import simulate_single_pallet, DEFAULT_SINGLE_THRESHOLD
-from src.utils.helpers import group_products_smart
+from src.core.packing_first_fit import pack_maximal_rectangles_first_fit
+from src.utils.helpers import group_products_smart, urun_hacmi
 from src.models import PaletConfig, UrunData
 
 
@@ -233,6 +234,23 @@ def run_de_with_defaults(palet_cfg: PaletConfig, products: List[UrunData]):
     return best_chromosome, history, duration
 
 
+def run_greedy_with_defaults(palet_cfg: PaletConfig, products: List[UrunData]):
+    """Greedy First-Fit packer'ı çalıştırır.
+
+    Tüm parametreler mevcut varsayılan ayarlar.
+    """
+    urunler_greedy = copy.deepcopy(products)
+
+    start = time.perf_counter()
+    pallet_list = pack_maximal_rectangles_first_fit(
+        urunler=urunler_greedy,
+        palet_cfg=palet_cfg,
+    )
+    duration = time.perf_counter() - start
+
+    return pallet_list, duration
+
+
 def summarize_chromosome(chromosome) -> Optional[Dict[str, Any]]:
     """GA/DE dönüşü olan kromozomdan ortak metrikleri çıkarır.
 
@@ -255,6 +273,40 @@ def summarize_chromosome(chromosome) -> Optional[Dict[str, Any]]:
         "fitness": fitness,
         "utilization": float(utilization),  # 0-1
         "pallets": int(pallets),
+    }
+
+
+def summarize_greedy_result(
+    pallet_list: List[Dict[str, Any]],
+    palet_cfg: PaletConfig,
+) -> Optional[Dict[str, Any]]:
+    """Greedy packer'dan dönen pallet listesinden özet metrikler çıkarır.
+
+    Dönüş:
+        Dict with 'fitness', 'utilization', 'pallets' alanları.
+        Veya None eğer liste boşsa.
+    """
+    if not pallet_list:
+        return None
+
+    total_pallets = len(pallet_list)
+    total_volume_used = 0.0
+
+    for pallet in pallet_list:
+        for item in pallet.get('items', []):
+            item_vol = float(item['L']) * float(item['W']) * float(item['H'])
+            total_volume_used += item_vol
+
+    pallet_volume = _get_pallet_volume(palet_cfg)
+    if pallet_volume <= 0:
+        utilization = 0.0
+    else:
+        utilization = min(total_volume_used / (total_pallets * pallet_volume), 1.0)
+
+    return {
+        "fitness": None,  # Greedy'nin fitness değeri yok
+        "utilization": float(utilization),  # 0-1 arası oran
+        "pallets": int(total_pallets),
     }
 
 
@@ -320,11 +372,11 @@ def combine_with_single_prepass(
 
 
 def compare_algorithms(palet_cfg: PaletConfig, products: List[UrunData]):
-    """GA ve DE'yi Django UI'ye benzer single + mix akışıyla karşılaştırır.
+    """GA, DE ve Greedy'yi Django UI'ye benzer single + mix akışıyla karşılaştırır.
 
     Akış:
         1) Single pallet pre-pass → single_pallet_count, mix_pool, single_used_volume
-        2) GA/DE yalnızca mix_pool üzerinde çalışır (varsa)
+        2) GA/DE/Greedy yalnızca mix_pool üzerinde çalışır (varsa)
         3) Sonuçlar combine_with_single_prepass ile birleştirilir
         4) Süre metrikleri single pre-pass + algoritma süresinin toplamıdır
     """
@@ -416,20 +468,63 @@ def compare_algorithms(palet_cfg: PaletConfig, products: List[UrunData]):
 
     clear_runtime_state()
 
+    # --- GREEDY ---
+    greedy_products = copy.deepcopy(products)
+
+    greedy_pre_start = time.perf_counter()
+    greedy_single_pallet_count, greedy_mix_pool, greedy_single_used_volume = run_single_pallet_prepass(
+        palet_cfg, greedy_products
+    )
+    greedy_pre_time = time.perf_counter() - greedy_pre_start
+
+    greedy_pallet_list = None
+    greedy_algo_time = 0.0
+    greedy_mix_summary = None
+
+    if greedy_mix_pool:
+        greedy_pallet_list, greedy_algo_time = run_greedy_with_defaults(palet_cfg, greedy_mix_pool)
+        greedy_mix_summary = summarize_greedy_result(greedy_pallet_list, palet_cfg)
+
+    greedy_total_time = greedy_pre_time + greedy_algo_time
+    greedy_combined_summary = combine_with_single_prepass(
+        greedy_mix_summary,
+        palet_cfg,
+        greedy_single_pallet_count,
+        greedy_single_used_volume,
+    )
+
+    results["greedy"] = {
+        "name": "Greedy / First-Fit",
+        "pallet_list": greedy_pallet_list,
+        "time": greedy_total_time,
+        "summary": greedy_combined_summary,
+        "prepass": {
+            "single_pallet_count": greedy_single_pallet_count,
+            "single_used_volume": greedy_single_used_volume,
+            "mix_pool_size": len(greedy_mix_pool),
+            "time": greedy_pre_time,
+        },
+        "mix_summary": greedy_mix_summary,
+    }
+
+    clear_runtime_state()
+
     return results
 
 
 def render_results(results: Dict[str, Any]):
-    """Streamlit arayüzünde karşılaştırma sonuçlarını gösterir."""
+    """Streamlit arayüzünde karşılaştırma sonuçlarını gösterir (3 algoritma)."""
     ga = results.get("ga")
     de = results.get("de")
+    greedy = results.get("greedy")
 
     ga_sum = ga.get("summary") if ga else None
     de_sum = de.get("summary") if de else None
+    greedy_sum = greedy.get("summary") if greedy else None
 
     st.subheader("Karşılaştırma Sonuçları")
 
-    col1, col2 = st.columns(2)
+    col1, col2, col3 = st.columns(3)
 
     # GA kartı
     with col1:
@@ -449,12 +544,12 @@ def render_results(results: Dict[str, Any]):
             )
             pre = ga.get("prepass", {})
             st.markdown("---")
-            st.markdown("**Palet Dağılımı (GA)**")
-            st.write(f"Single Palet: {pre.get('single_pallet_count', 0)}")
-            st.write(f"Mix Pool Ürün Sayısı: {pre.get('mix_pool_size', 0)}")
+            st.markdown("**Palet Dağılımı**")
+            st.write(f"Single: {pre.get('single_pallet_count', 0)}")
+            st.write(f"Mix Pool Ürün: {pre.get('mix_pool_size', 0)}")
             st.write(f"Mix Palet: {ga_sum.get('mix_pallet_count', 0)}")
         else:
-            st.error("GA herhangi bir çözüm üretemedi veya özet metrikler okunamadı.")
+            st.error("GA: çözüm üretilemedi")
 
     # DE kartı
     with col2:
@@ -474,67 +569,93 @@ def render_results(results: Dict[str, Any]):
             )
             pre = de.get("prepass", {})
             st.markdown("---")
-            st.markdown("**Palet Dağılımı (DE)**")
-            st.write(f"Single Palet: {pre.get('single_pallet_count', 0)}")
-            st.write(f"Mix Pool Ürün Sayısı: {pre.get('mix_pool_size', 0)}")
+            st.markdown("**Palet Dağılımı**")
+            st.write(f"Single: {pre.get('single_pallet_count', 0)}")
+            st.write(f"Mix Pool Ürün: {pre.get('mix_pool_size', 0)}")
             st.write(f"Mix Palet: {de_sum.get('mix_pallet_count', 0)}")
         else:
-            st.error("DE herhangi bir çözüm üretemedi veya özet metrikler okunamadı.")
+            st.error("DE: çözüm üretilemedi")
+
+    # GREEDY kartı
+    with col3:
+        st.markdown("### Greedy / First-Fit")
+        if greedy_sum:
+            st.metric(
+                label="Çalışma süresi (sn)",
+                value=f"{greedy['time']:.3f}",
+            )
+            st.metric(
+                label="Toplam doluluk (%)",
+                value=f"{greedy_sum['utilization'] * 100:.2f}",
+            )
+            st.metric(
+                label="Kullanılan palet sayısı",
+                value=str(greedy_sum["pallets"]),
+            )
+            pre = greedy.get("prepass", {})
+            st.markdown("---")
+            st.markdown("**Palet Dağılımı**")
+            st.write(f"Single: {pre.get('single_pallet_count', 0)}")
+            st.write(f"Mix Pool Ürün: {pre.get('mix_pool_size', 0)}")
+            st.write(f"Mix Palet: {greedy_sum.get('mix_pallet_count', 0)}")
+        else:
+            st.error("Greedy: çözüm üretilemedi")
 
     # İsteğe bağlı özet karşılaştırmalar
-    if ga_sum and de_sum:
+    if ga_sum and de_sum and greedy_sum:
         st.markdown("---")
-        st.subheader("Özet Karşılaştırma")
+        st.subheader("Özet Karşılaştırma (3 Algoritma)")
 
-        faster = None
-        if ga["time"] < de["time"]:
-            faster = "GA"
-        elif de["time"] < ga["time"]:
-            faster = "DE"
+        # Daha hızlı
+        times = [ga["time"], de["time"], greedy["time"]]
+        algo_names = ["GA", "DE", "Greedy"]
+        min_time_idx = times.index(min(times))
+        faster = algo_names[min_time_idx]
 
-        better_util = None
-        if ga_sum["utilization"] > de_sum["utilization"]:
-            better_util = "GA"
-        elif de_sum["utilization"] > ga_sum["utilization"]:
-            better_util = "DE"
+        # Daha yüksek doluluk
+        utils = [ga_sum["utilization"], de_sum["utilization"], greedy_sum["utilization"]]
+        max_util_idx = utils.index(max(utils))
+        better_util = algo_names[max_util_idx]
 
-        fewer_pallets = None
-        if ga_sum["pallets"] < de_sum["pallets"]:
-            fewer_pallets = "GA"
-        elif de_sum["pallets"] < ga_sum["pallets"]:
-            fewer_pallets = "DE"
+        # Daha az palet
+        pallets = [ga_sum["pallets"], de_sum["pallets"], greedy_sum["pallets"]]
+        min_pallets_idx = pallets.index(min(pallets))
+        fewer_pallets = algo_names[min_pallets_idx]
 
         cols = st.columns(3)
 
         with cols[0]:
-            st.markdown("**Daha hızlı algoritma**")
-            st.write(faster or "Berabere / Belirsiz")
+            st.markdown("**Daha hızlı**")
+            st.write(faster)
 
         with cols[1]:
-            st.markdown("**Daha yüksek doluluk**")
-            st.write(better_util or "Berabere / Belirsiz")
+            st.markdown("**Yüksek doluluk**")
+            st.write(better_util)
 
         with cols[2]:
-            st.markdown("**Daha az palet kullanan**")
-            st.write(fewer_pallets or "Berabere / Belirsiz")
+            st.markdown("**Az palet**")
+            st.write(fewer_pallets)
 
 
 def main():
-    st.set_page_config(page_title="GA vs DE Karşılaştırma", layout="wide")
+    st.set_page_config(page_title="GA vs DE vs Greedy Karşılaştırma", layout="wide")
 
-    st.title("GA vs DE Karşılaştırma Aracı")
+    st.title("GA vs DE vs Greedy Karşılaştırma Aracı")
     st.markdown(
         """
-                Bu ekran, mevcut 3D Bin Packing motorundaki **Genetik Algoritma (GA)** ve
-                **Differential Evolution (DE)** çözücülerini **aynı JSON girdisi** üzerinde,
-                Django arayüzündeki akışa benzer şekilde karşılaştırmak için tasarlanmıştır.
+                Bu ekran, mevcut 3D Bin Packing motorundaki **Genetik Algoritma (GA)**, 
+                **Differential Evolution (DE)** ve **Greedy/First-Fit** çözücülerini 
+                **aynı JSON girdisi** üzerinde, Django arayüzündeki akışa benzer şekilde 
+                karşılaştırmak için tasarlanmıştır.
 
                 - Mevcut algoritma modülleri doğrudan kullanılır.
                 - Algoritma içi parametre mantığı **değiştirilmez**.
                 - JSON veri sadece **bir kez** parse edilir ve algoritmalara kopyaları verilir.
-                - Akış: önce single pallet pre-pass ile tek ürün paletleri çıkarılır,
-                    kalan ürünler mix pool'a alınır ve GA/DE sadece bu mix pool üzerinde
-                    çalıştırılır.
+                - Akış (tüm 3 algoritma için): önce single pallet pre-pass ile tek ürün paletleri çıkarılır,
+                    kalan ürünler mix pool'a alınır ve her algoritma (GA/DE/Greedy) bu mix pool 
+                    üzerinde çalıştırılır.
+                - **Greedy/First-Fit**: Deterministik, hızlı baseline algoritması. Maximal rectangles 
+                    heuristic ile palet packing yapar.
                 - Sonuç kartlarında gösterilen süre, single pre-pass + mix optimizasyon
                     süresinin toplamıdır.
         """
