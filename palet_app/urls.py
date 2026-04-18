@@ -15,4 +15,12 @@ urlpatterns = [
     path('yukle-sonuc/', views.upload_result, name='upload_result'),
     path('yerlestirme-baslat/', views.start_placement, name='start_placement'),
     path('optimizasyon-durumu/', views.optimization_status, name='optimization_status'),
+    # Benchmark (Toplu Test)
+    path('benchmark/baslat/', views.start_benchmark, name='start_benchmark'),
+    path('benchmark/isleniyor/', views.benchmark_processing, name='benchmark_processing'),
+    path('benchmark/durum/', views.benchmark_status, name='benchmark_status'),
+    path('benchmark/sonuc/', views.benchmark_result, name='benchmark_result'),
+    path('benchmark/sec/<int:optimization_id>/', views.benchmark_select, name='benchmark_select'),
+    path('optimizasyon-iptal/', views.cancel_optimization, name='cancel_optimization'),
+    path('benchmark/iptal/', views.cancel_benchmark, name='cancel_benchmark'),
 ]

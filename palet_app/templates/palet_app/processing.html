@@ -11,7 +11,7 @@
     </div>
     
     <div class="mb-6 bg-gray-200 rounded-full h-4 overflow-hidden">
-        <div id="progressBar" class="bg-blue-600 h-4 w-0 transition-all duration-500"></div>
+        <div id="progressBar" class="bg-blue-600 h-4 w-0"></div>
     </div>
     
     <div class="bg-gray-900 text-white font-mono text-sm p-4 rounded-xl shadow-inner h-64 overflow-auto">
@@ -33,6 +33,21 @@
         let maxRetries = 3;
         let timeoutId;
         let requestInProgress = false;
+
+        // Yumuşak bar state'i — rAF ile 1-1 yaklaşır
+        const bar = { displayed: 0, target: 0, finalPush: false };
+        function tickBar() {
+            if (bar.displayed < bar.target) {
+                const diff = bar.target - bar.displayed;
+                const step = bar.finalPush
+                    ? Math.max(0.8, diff * 0.15)
+                    : Math.max(0.08, diff * 0.04);
+                bar.displayed = Math.min(bar.target, bar.displayed + step);
+                progressBar.css('width', `${bar.displayed.toFixed(1)}%`);
+            }
+            requestAnimationFrame(tickBar);
+        }
+        requestAnimationFrame(tickBar);
         
         // İşlem durumunu kontrol et
         function checkStatus() {
@@ -53,7 +68,8 @@
                         if (response.completed) {
                             // İşlem tamamlandı, analiz sayfasına yönlendir
                             completed = true;
-                            progressBar.css('width', '100%');
+                            bar.target = 100;
+                            bar.finalPush = true;
                             progressText.text('Optimizasyon tamamlandı! Yönlendiriliyor...');
                             addLogMessage('✓ İşlem başarıyla tamamlandı!');
                             
@@ -61,9 +77,11 @@
                                 window.location.href = response.next_url;
                             }, 1500);
                         } else {
-                            // İlerleme çubuğunu güncelle
-                            const progress = (response.current_step / response.total_steps) * 100;
-                            progressBar.css('width', `${progress}%`);
+                            // Hedef yüzdeyi backend'den al (faz tabanlı); bar rAF ile yumuşak ilerler
+                            const target = (typeof response.percent === 'number')
+                                ? response.percent
+                                : Math.max(0, Math.min(95, (response.current_step / response.total_steps) * 100));
+                            if (target > bar.target) bar.target = target;
                             
                             // Mesajları güncelle, ancak yalnızca yeni mesajları ekle
                             if (response.messages.length > lastStepCount) {
@@ -131,11 +149,21 @@
             container.scrollTop = container.scrollHeight;
         }
         
-        // Sayfa kapatılırken temizlik
-        $(window).on('beforeunload', function() {
-            if (timeoutId) {
-                clearTimeout(timeoutId);
-            }
+        // Sayfadan ayrılınca backend'e iptal sinyali gönder
+        function sendCancel() {
+            if (completed) return;
+            try {
+                const url = '{% url "palet_app:cancel_optimization" %}';
+                if (navigator.sendBeacon) {
+                    navigator.sendBeacon(url, new Blob([], {type: 'text/plain'}));
+                } else {
+                    $.ajax({ url: url, type: 'POST', async: false });
+                }
+            } catch (_e) {}
+        }
+        $(window).on('beforeunload pagehide', function() {
+            if (timeoutId) clearTimeout(timeoutId);
+            sendCancel();
         });
         
         // Başlangıç ​​mesajı

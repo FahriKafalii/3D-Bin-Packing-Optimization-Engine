@@ -1,12 +1,17 @@
 import json
+import math
 import os
 import tempfile
+import threading
+import time
+import uuid
 from threading import Thread
 from django.shortcuts import render, redirect, get_object_or_404
 from django.http import JsonResponse, HttpResponseBadRequest
 from django.urls import reverse
 from django.db import transaction
-from .models import Urun, Palet, Optimization
+from django.views.decorators.csrf import csrf_exempt
+from .models import Urun, Palet, Optimization, PHASE_RANGES
 from .services import (
     single_palet_yerlestirme,
     chromosome_to_palets,
@@ -17,28 +22,132 @@ from .services import (
     ozet_grafikler_olustur,
 )
 from src.models import PaletConfig, UrunData
-from src.core.mix_pallet import mix_palet_yerlestirme_main as mix_palet_yerlestirme
+from src.core.packing_first_fit import pack_maximal_rectangles_first_fit
 from src.utils.visualization import renk_uret
+
+
+# ====================================================================
+# CANCEL REGISTRY — kullanıcı sayfadan ayrılırsa iş iptal edilsin.
+# Process-içi set; tek-worker dev sunucusunda yeterli.
+# ====================================================================
+
+_CANCEL_LOCK = threading.Lock()
+_CANCELLED_OPTS = set()       # opt_id'ler
+_CANCELLED_GROUPS = set()     # benchmark group_id'ler
+
+
+def _cancel_opt(opt_id):
+    with _CANCEL_LOCK:
+        _CANCELLED_OPTS.add(int(opt_id))
+
+
+def _cancel_group(group_id):
+    if not group_id:
+        return
+    with _CANCEL_LOCK:
+        _CANCELLED_GROUPS.add(str(group_id))
+
+
+def _is_cancelled(opt_id=None, group_id=None):
+    with _CANCEL_LOCK:
+        if opt_id is not None and int(opt_id) in _CANCELLED_OPTS:
+            return True
+        if group_id is not None and str(group_id) in _CANCELLED_GROUPS:
+            return True
+    return False
+
+
+class OptimizationCancelled(Exception):
+    """Worker'a iptal sinyali taşır."""
+    pass
+
+
+def _check_cancel(opt_id, group_id=None):
+    if _is_cancelled(opt_id=opt_id, group_id=group_id):
+        raise OptimizationCancelled()
 
 
 # ====================================================================
 # PROGRESS HELPER (thread-safe, no external deps)
 # ====================================================================
 
-def _normalize_progress(current_step, total_steps, completed=False):
+def _run_greedy_mix(urun_data_listesi, palet_cfg, start_id):
+    """Saf greedy mix palet yerleştirme (First-Fit + Maximal Rectangles).
+    mix_palet_data_to_django formatında sonuç döndürür.
     """
-    Returns safe (current_step, total_steps, percent) tuple.
-    - total_steps is always >= 1
-    - current_step is always in [0, total_steps]
-    - percent is always in [0, 100]
-    - If completed=True, percent is forced to 100
+    pallets = pack_maximal_rectangles_first_fit(urun_data_listesi, palet_cfg)
+    result = []
+    pid = start_id
+    for p in pallets:
+        result.append({
+            'id': pid,
+            'type': 'MIX',
+            'quantity': len(p['items']),
+            'items': p['items'],
+            'weight': p.get('weight', 0),
+        })
+        pid += 1
+    return result
+
+
+def _estimate_mix_sec(algoritma, urun_sayisi):
+    """Mix aşamasının tahmini süresi (saniye). Kaba — ease-out zaten tolerant."""
+    n = max(1, int(urun_sayisi))
+    if algoritma == 'greedy':
+        return max(3.0, 2.0 + n * 0.05)
+    if algoritma == 'differential_evolution':
+        return max(15.0, 15.0 + n * 0.6)
+    # genetic ve diğerleri
+    return max(10.0, 10.0 + n * 0.8)
+
+
+def _phase_progress(durum, completed=False, error=False):
+    """
+    Zaman tabanlı ease-out ile faza göre ilerleme hesaplar.
+
+    - Her fazın PHASE_RANGES içinde (start, end, label) değeri vardır.
+    - Faza girildiğinde yüzde = start; fazın tahmini süresi boyunca
+      ease-out (1 - e^(-t/tau)) eğrisiyle (end - 1)'e yaklaşır.
+    - Asla end'e ulaşmaz; bir sonraki set_phase() ile yüzde start'a çıkar.
+    - completed=True → 100. error → mevcut yüzde korunur (kırmızı bar).
+    - Monotonluk garantisi: durum['last_pct'] ile yüzde asla geri gitmez.
+    """
+    if completed:
+        return 100, 'Tamamlandı'
+
+    phase = durum.get('phase')
+    last_pct = float(durum.get('last_pct', 0))
+
+    if not phase or phase not in PHASE_RANGES:
+        return int(round(last_pct)), durum.get('phase_label', 'Hazırlanıyor')
+
+    start, end, label = PHASE_RANGES[phase]
+    start = float(start)
+    end   = float(end)
+    span  = max(0.0, end - start - 1.0)  # end'e asla dokunmasın
+
+    expected = max(0.5, float(durum.get('phase_expected_sec', 5.0)))
+    elapsed  = max(0.0, time.time() - float(durum.get('phase_start', time.time())))
+    tau = expected / 3.0  # ~3*tau sonunda %95 doygunluk
+
+    k = 1.0 - math.exp(-elapsed / tau) if tau > 0 else 1.0
+    pct = start + span * k
+
+    pct = max(pct, last_pct)  # geri gitme
+    pct = max(0.0, min(99.0, pct))
+    return int(round(pct)), label
+
+
+def _normalize_progress(current_step, total_steps, completed=False, durum=None, error=False):
+    """current_step/total_steps + faz tabanlı yüzde + label.
+    durum verilirse faz bilgisi kullanılır; son yüzde durum['last_pct']'e yazılır.
     """
     total = max(1, int(total_steps))
     cur   = max(0, min(int(current_step), total))
-    if completed:
-        return total, total, 100
-    pct = int(round(100 * cur / total))
-    pct = max(0, min(100, pct))
+    if durum is None:
+        pct = 100 if completed else max(0, min(95, int(round(100 * cur / total))))
+        return cur, total, pct
+    pct, _label = _phase_progress(durum, completed=completed, error=error)
     return cur, total, pct
 
 
@@ -253,23 +362,35 @@ def urun_listesi(request):
     return render(request, 'palet_app/urun_listesi.html', context)
 
 # Arka planda çalışacak optimizasyon işlemi
-def run_optimization(urun_verileri, container_info, optimization_id, algoritma='greedy', ga_mode='balanced'):
+def run_optimization(urun_verileri, container_info, optimization_id, algoritma='greedy', ga_mode='balanced', group_id=None):
     """
     Arka planda çalışacak optimizasyon işlemi. Bu fonksiyon bir thread içinde çalışır.
     ga_mode: sadece genetic için kullanılır — 'fast', 'balanced', 'quality'.
+    group_id: Benchmark grubu; sayfadan çıkılınca toplu iptal için.
     """
     try:
+        _check_cancel(optimization_id, group_id)
         optimization = Optimization.objects.get(id=optimization_id)
         # Tek dogru kaynak: baslatma aninda kaydedilen algoritma (DB)
         algoritma = (optimization.algoritma or 'greedy').strip().lower()
         if algoritma not in ('genetic', 'differential_evolution', 'greedy'):
             algoritma = 'greedy'
-        print(f"\nrun_optimization() basladi (ID: {optimization_id}, Algoritma DB'den: {algoritma})")
+        _thread_t0 = time.time()
+        # Her algoritma kendi süresini t=0'dan başlasın (sıralı çalıştırmada
+        # önceki algoritmaların beklemesi bu süreye yansımasın).
+        from django.utils import timezone as _tz
+        optimization.baslangic_zamani = _tz.now()
+        optimization.save(update_fields=['baslangic_zamani'])
+        print(f"\nrun_optimization() basladi (ID: {optimization_id}, Algoritma DB'den: {algoritma}, t0={_thread_t0:.3f})")
         print(f"Optimization objesi bulundu (ID: {optimization_id})")
-        
+
         # Hangi algoritmanin calistigini net yaz (yanlis baglanti kontrolu icin)
+        _check_cancel(optimization_id, group_id)
+        optimization.set_phase('baslangic')
         optimization.islem_adimi_ekle(f"[MOTOR] Algoritma: {algoritma.upper()}")
         # Adım 1: Ürünleri veritabanına kaydet
+        _check_cancel(optimization_id, group_id)
+        optimization.set_phase('urunler')
         optimization.islem_adimi_ekle("Ürün verileri yükleniyor...")
         
         urunler = []
@@ -289,6 +410,8 @@ def run_optimization(urun_verileri, container_info, optimization_id, algoritma='
             urunler.append(urun)
         
         # Adım 2: Single palet yerleştirme
+        _check_cancel(optimization_id, group_id)
+        optimization.set_phase('single', expected_sec=max(3.0, len(urunler) * 0.04))
         optimization.islem_adimi_ekle("Single paletler oluşturuluyor...")
         single_paletler, yerlesmemis_urunler = single_palet_yerlestirme(urunler, container_info, optimization)
         
@@ -318,6 +441,10 @@ def run_optimization(urun_verileri, container_info, optimization_id, algoritma='
             urun_data_listesi.append(urun_data)
         
         # Adım 3: Mix palet yerleştirme
+        _check_cancel(optimization_id, group_id)
+        mix_motor_start = time.time()
+        optimization.set_phase('mix', expected_sec=_estimate_mix_sec(algoritma, len(urun_data_listesi)))
+        optimization.islem_adimi_ekle(f"[TANI] Mix motoru başlıyor — yerleşmeyen ürün sayısı: {len(urun_data_listesi)}")
         if algoritma == 'genetic':
             from src.core.genetic_algorithm import run_ga
             
@@ -379,10 +506,10 @@ def run_optimization(urun_verileri, container_info, optimization_id, algoritma='
                 optimization.islem_adimi_ekle(f"{len(mix_paletler)} adet mix palet oluşturuldu (GA).")
             else:
                 optimization.islem_adimi_ekle("GA çözüm üretemedi, Greedy yönteme geçiliyor...")
-                mix_palet_data = mix_palet_yerlestirme(urun_data_listesi, palet_cfg, len(single_paletler) + 1)
+                mix_palet_data = _run_greedy_mix(urun_data_listesi, palet_cfg, len(single_paletler) + 1)
                 mix_paletler = mix_palet_data_to_django(mix_palet_data, palet_cfg, optimization)
                 optimization.islem_adimi_ekle(f"{len(mix_paletler)} adet mix palet oluşturuldu (Greedy).")
-        
+
         elif algoritma == 'differential_evolution':
             from src.core.optimizer_de import optimize_with_de
             
@@ -428,19 +555,28 @@ def run_optimization(urun_verileri, container_info, optimization_id, algoritma='
                 optimization.islem_adimi_ekle(f"{len(mix_paletler)} adet mix palet oluşturuldu (DE).")
             else:
                 optimization.islem_adimi_ekle("DE çözüm üretemedi, Greedy yönteme geçiliyor...")
-                mix_palet_data = mix_palet_yerlestirme(urun_data_listesi, palet_cfg, len(single_paletler) + 1)
+                mix_palet_data = _run_greedy_mix(urun_data_listesi, palet_cfg, len(single_paletler) + 1)
                 mix_paletler = mix_palet_data_to_django(mix_palet_data, palet_cfg, optimization)
                 optimization.islem_adimi_ekle(f"{len(mix_paletler)} adet mix palet oluşturuldu (Greedy).")
-        
+
         else:
-            optimization.islem_adimi_ekle("Mix paletler oluşturuluyor (Greedy)...")
-            mix_palet_data = mix_palet_yerlestirme(urun_data_listesi, palet_cfg, len(single_paletler) + 1)
+            optimization.islem_adimi_ekle("Mix paletler oluşturuluyor (Greedy - First-Fit + Maximal Rectangles)...")
+            mix_palet_data = _run_greedy_mix(urun_data_listesi, palet_cfg, len(single_paletler) + 1)
             mix_paletler = mix_palet_data_to_django(mix_palet_data, palet_cfg, optimization)
-            optimization.islem_adimi_ekle(f"{len(mix_paletler)} adet mix palet oluşturuldu.")
+            optimization.islem_adimi_ekle(f"{len(mix_paletler)} adet mix palet oluşturuldu (Greedy).")
         
+        mix_motor_sec = round(time.time() - mix_motor_start, 2)
+        optimization.islem_adimi_ekle(
+            f"[TANI] Mix motoru bitti ({algoritma.upper()}): {mix_motor_sec} sn, "
+            f"{len(mix_paletler)} mix palet üretildi"
+        )
+
         # ── Merge & Repack post-optimizasyon ─────────────────────────────────
+        merge_start = time.time()
         if len(mix_paletler) >= 2:
             # Aşama 1 — İteratif BFD (belirlenimsel, hızlı)
+            _check_cancel(optimization_id, group_id)
+            optimization.set_phase('merge1', expected_sec=max(4.0, len(mix_paletler) * 0.8))
             optimization.islem_adimi_ekle(
                 f"[1/2] Merge & Repack BFD basliyor "
                 f"({len(mix_paletler)} mix palet → iteratif birleştirme)..."
@@ -456,6 +592,8 @@ def run_optimization(urun_verileri, container_info, optimization_id, algoritma='
 
             # Aşama 2 — Random Restart (stokastik, BFD sonrası kalan fırsatı karolar)
             if len(mix_paletler) >= 2:
+                _check_cancel(optimization_id, group_id)
+                optimization.set_phase('merge2', expected_sec=max(3.0, len(mix_paletler) * 0.5))
                 optimization.islem_adimi_ekle(
                     f"[2/2] Merge & Repack Random Restart basliyor "
                     f"({len(mix_paletler)} palet kaldı)..."
@@ -468,6 +606,12 @@ def run_optimization(urun_verileri, container_info, optimization_id, algoritma='
                     urun_data_listesi=urun_data_listesi,
                 )
                 optimization.islem_adimi_ekle(mr_metrics.summary())
+
+        merge_sec = round(time.time() - merge_start, 2)
+        optimization.islem_adimi_ekle(
+            f"[TANI] Merge & Repack bitti ({algoritma.upper()}): {merge_sec} sn, "
+            f"son {len(mix_paletler)} mix palet"
+        )
 
         # Adım 4: İstatistikleri güncelle (Görselleştirme artık on-the-fly yapılıyor)
         optimization.islem_adimi_ekle("İstatistikler hesaplanıyor...")
@@ -509,8 +653,11 @@ def run_optimization(urun_verileri, container_info, optimization_id, algoritma='
         optimization.yerlesmemis_urunler = son_yerlesmeyen_urunler
         
         # Tum paletler icin gorselleri olustur
+        _check_cancel(optimization_id, group_id)
+        optimization.set_phase('gorsel', expected_sec=max(2.0, len(tum_paletler) * 0.25))
         optimization.islem_adimi_ekle("Palet görselleri oluşturuluyor...")
         for palet in tum_paletler:
+            _check_cancel(optimization_id, group_id)
             if not palet.gorsel:  # Henüz görsel yoksa
                 try:
                     urun_konumlari = palet.json_to_dict(palet.urun_konumlari)
@@ -537,6 +684,20 @@ def run_optimization(urun_verileri, container_info, optimization_id, algoritma='
         print(f"Yerleşemeyen: {len(son_yerlesmeyen_urunler)}")
         print(f"{'='*60}\n")
         
+    except OptimizationCancelled:
+        print(f"[IPTAL] Optimization {optimization_id} ({algoritma}) kullanıcı tarafından iptal edildi.")
+        try:
+            optimization = Optimization.objects.get(id=optimization_id)
+            optimization.islem_adimi_ekle("İşlem kullanıcı tarafından iptal edildi.")
+            durum = optimization.get_islem_durumu()
+            durum['current_step'] = -1
+            durum['cancelled'] = True
+            optimization.islem_durumu = json.dumps(durum)
+            optimization.save()
+        except Exception as inner_e:
+            print(f"Cancel temizlik hatasi: {inner_e}")
+        return
+
     except Exception as e:
         # Hata durumunda
         import traceback
@@ -548,7 +709,7 @@ def run_optimization(urun_verileri, container_info, optimization_id, algoritma='
         print(f"HATA: {str(e)}")
         print(f"DETAY:\n{error_detail}")
         print(f"{'='*60}\n")
-        
+
         try:
             optimization = Optimization.objects.get(id=optimization_id)
             optimization.islem_adimi_ekle(f"Hata: {str(e)}")
@@ -713,17 +874,22 @@ def optimization_status(request):
                 'next_url': reverse('palet_app:analysis')
             })
         
+        is_error = durum.get('current_step', 0) == -1
         cur, tot, pct = _normalize_progress(
             durum.get('current_step', 0),
             durum.get('total_steps', 5),
-            completed=False
+            completed=False,
+            durum=durum,
+            error=is_error,
         )
+        phase_label = PHASE_RANGES.get(durum.get('phase', ''), (0, 0, 'Hazırlanıyor'))[2]
         return JsonResponse({
             'success': True,
             'completed': False,
             'current_step': cur,
             'total_steps': tot,
             'percent': pct,
+            'phase_label': phase_label,
             'messages': durum.get('messages', [])
         })
         
@@ -920,3 +1086,306 @@ def palet_3d_data(request, palet_id):
 # Ana sayfa
 def home_view(request):
     return render(request, 'palet_app/home.html')  # Ana sayfa şablonunu render et
+
+
+# ====================================================================
+# BENCHMARK (TOPLU TEST) — 3 algoritmayı paralel çalıştır ve karşılaştır
+# ====================================================================
+
+BENCHMARK_ALGORITHMS = [
+    {'key': 'greedy', 'label': 'Greedy', 'ga_mode': None},
+    {'key': 'genetic', 'label': 'Genetik Algoritma', 'ga_mode': 'balanced'},
+    {'key': 'differential_evolution', 'label': 'Differential Evolution', 'ga_mode': None},
+]
+
+
+def start_benchmark(request):
+    """3 algoritmayı aynı ürün verisi üzerinde paralel çalıştırır."""
+    if request.method != 'POST':
+        return JsonResponse({'success': False, 'error': 'Yalnızca POST istekleri kabul edilir.'}, status=400)
+
+    if 'urun_verileri' not in request.session:
+        return JsonResponse({'success': False, 'error': 'Ürün verileri bulunamadı.'}, status=400)
+
+    container_info = request.session.get('container_info')
+    if not container_info:
+        return JsonResponse({'success': False, 'error': 'Container bilgisi bulunamadı.'}, status=400)
+
+    container_length = container_info.get('length', 120)
+    container_width = container_info.get('width', 100)
+    container_height = container_info.get('height', 180)
+    container_weight = container_info.get('weight', 1250)
+
+    group_id = str(uuid.uuid4())
+    created_ids = []
+
+    with transaction.atomic():
+        for algo in BENCHMARK_ALGORITHMS:
+            optimization = Optimization.objects.create(
+                palet_tipi=None,
+                container_length=container_length,
+                container_width=container_width,
+                container_height=container_height,
+                container_weight=container_weight,
+                algoritma=algo['key'],
+                benchmark_group_id=group_id,
+                islem_durumu=json.dumps({
+                    "current_step": 0,
+                    "total_steps": 5,
+                    "messages": []
+                })
+            )
+            created_ids.append((optimization.id, algo['key'], algo['ga_mode']))
+
+    request.session['benchmark_group_id'] = group_id
+    request.session.modified = True
+
+    print(f"\n{'='*60}\nBENCHMARK BASLATILDI (Group: {group_id})\n{'='*60}")
+
+    container_dict = {
+        'length': container_length,
+        'width': container_width,
+        'height': container_height,
+        'weight': container_weight,
+    }
+
+    # Tek thread içinde SIRAYLA çalıştır — paralel DB kilitlenmesini ve
+    # yanıltıcı aynı-süre sonuçlarını engeller. Her algoritma kendi 0→100'ünü
+    # UI'da tamamlayıp bir sonrakine devreder.
+    urun_verileri_snapshot = list(request.session['urun_verileri'])
+
+    def _run_benchmark_sequence():
+        for opt_id, algo_key, ga_mode in created_ids:
+            if _is_cancelled(group_id=group_id):
+                print(f"[Benchmark] Grup iptal edildi, kalanlar atlaniyor.")
+                # Kalan (başlamamış) optimizasyonları da iptal işaretle
+                try:
+                    remaining = Optimization.objects.filter(
+                        benchmark_group_id=group_id, tamamlandi=False
+                    )
+                    for r in remaining:
+                        d = r.get_islem_durumu()
+                        if d.get('current_step', 0) != -1:
+                            r.islem_adimi_ekle("İşlem kullanıcı tarafından iptal edildi.")
+                            d = r.get_islem_durumu()
+                            d['current_step'] = -1
+                            d['cancelled'] = True
+                            r.islem_durumu = json.dumps(d)
+                            r.save()
+                except Exception as _e:
+                    print(f"Iptal temizlik hatasi: {_e}")
+                break
+            print(f"[Benchmark] BASLIYOR: {algo_key} (ID: {opt_id})")
+            try:
+                run_optimization(
+                    urun_verileri_snapshot,
+                    container_dict,
+                    opt_id,
+                    algo_key,
+                    ga_mode or 'balanced',
+                    group_id,
+                )
+                print(f"[Benchmark] BITTI: {algo_key} (ID: {opt_id})")
+            except Exception as e:
+                print(f"HATA: Benchmark ({algo_key}): {e}")
+
+    try:
+        t = Thread(target=_run_benchmark_sequence)
+        t.daemon = True
+        t.start()
+        print(f"[Benchmark] Sirali dispatcher thread baslatildi.")
+    except Exception as e:
+        print(f"HATA: Benchmark dispatcher baslatma: {e}")
+
+    return JsonResponse({
+        'success': True,
+        'benchmark_group_id': group_id,
+        'status_url': reverse('palet_app:benchmark_status'),
+        'processing_url': reverse('palet_app:benchmark_processing'),
+    })
+
+
+def benchmark_processing(request):
+    """Benchmark ilerleme sayfası — 3 algoritma progress bar'larını gösterir."""
+    group_id = request.session.get('benchmark_group_id')
+    if not group_id:
+        return redirect('palet_app:home')
+
+    optimizations = Optimization.objects.filter(benchmark_group_id=group_id).order_by('id')
+    if not optimizations.exists():
+        return redirect('palet_app:home')
+
+    return render(request, 'palet_app/benchmark_processing.html', {
+        'benchmark_group_id': group_id,
+        'optimizations': optimizations,
+    })
+
+
+def benchmark_status(request):
+    """Grup içindeki tüm optimizasyonların durumunu tek JSON'da döndürür."""
+    group_id = request.session.get('benchmark_group_id')
+    if not group_id:
+        return JsonResponse({'success': False, 'error': 'Benchmark grubu bulunamadı.'}, status=400)
+
+    optimizations = Optimization.objects.filter(benchmark_group_id=group_id).order_by('id')
+
+    items = []
+    all_done = True
+    any_error = False
+    for opt in optimizations:
+        durum = opt.get_islem_durumu()
+        is_error = durum.get('current_step', 0) == -1
+        cur, tot, pct = _normalize_progress(
+            durum.get('current_step', 0),
+            durum.get('total_steps', 5),
+            completed=opt.tamamlandi,
+            durum=durum,
+            error=is_error,
+        )
+        if is_error:
+            any_error = True
+        if not opt.tamamlandi and not is_error:
+            all_done = False
+
+        messages = durum.get('messages', []) or []
+        elapsed = None
+        if opt.bitis_zamani and opt.baslangic_zamani:
+            elapsed = round((opt.bitis_zamani - opt.baslangic_zamani).total_seconds(), 2)
+
+        items.append({
+            'id': opt.id,
+            'algoritma': opt.algoritma,
+            'completed': opt.tamamlandi,
+            'error': is_error,
+            'current_step': cur,
+            'total_steps': tot,
+            'percent': pct,
+            'last_message': messages[-1] if messages else '',
+            'messages': messages,
+            'elapsed': elapsed,
+        })
+
+    return JsonResponse({
+        'success': True,
+        'all_done': all_done,
+        'any_error': any_error,
+        'items': items,
+        'result_url': reverse('palet_app:benchmark_result'),
+    })
+
+
+def benchmark_result(request):
+    """3 algoritmanın sonuçlarını yan yana karşılaştırır."""
+    group_id = request.session.get('benchmark_group_id')
+    if not group_id:
+        return redirect('palet_app:home')
+
+    optimizations = Optimization.objects.filter(benchmark_group_id=group_id).order_by('id')
+    if not optimizations.exists():
+        return redirect('palet_app:home')
+
+    palet_cfg_dims = None
+    results = []
+    for opt in optimizations:
+        paletler = Palet.objects.filter(optimization=opt)
+
+        # Doluluk & toplam hacim hesabı
+        fill_ratios = []
+        total_used_vol = 0.0
+        container_vol = max(1.0, (opt.container_length or 1) * (opt.container_width or 1) * (opt.container_height or 1))
+
+        for p in paletler:
+            boyutlar = p.json_to_dict(p.urun_boyutlari)
+            used = 0.0
+            for _id, dims in boyutlar.items():
+                if isinstance(dims, (list, tuple)) and len(dims) >= 3:
+                    used += float(dims[0]) * float(dims[1]) * float(dims[2])
+            total_used_vol += used
+            fill_ratios.append(used / container_vol * 100.0)
+
+        avg_fill = (sum(fill_ratios) / len(fill_ratios)) if fill_ratios else 0.0
+        elapsed = None
+        if opt.bitis_zamani and opt.baslangic_zamani:
+            elapsed = (opt.bitis_zamani - opt.baslangic_zamani).total_seconds()
+
+        if palet_cfg_dims is None:
+            palet_cfg_dims = {
+                'length': opt.container_length,
+                'width': opt.container_width,
+                'height': opt.container_height,
+                'weight': opt.container_weight,
+            }
+
+        results.append({
+            'optimization': opt,
+            'algoritma': opt.algoritma,
+            'algoritma_label': _algoritma_label(opt.algoritma),
+            'completed': opt.tamamlandi,
+            'toplam_palet': opt.toplam_palet,
+            'single_palet': opt.single_palet,
+            'mix_palet': opt.mix_palet,
+            'avg_fill': round(avg_fill, 2),
+            'elapsed': round(elapsed, 2) if elapsed is not None else None,
+            'yerlesmemis_sayi': len(opt.yerlesmemis_urunler or []),
+        })
+
+    # En iyi sonucu işaretle: önce palet sayısı (düşük iyi), sonra doluluk (yüksek iyi)
+    completed_results = [r for r in results if r['completed'] and r['toplam_palet'] > 0]
+    best_id = None
+    if completed_results:
+        best = min(completed_results, key=lambda r: (r['toplam_palet'], -r['avg_fill']))
+        best_id = best['optimization'].id
+    for r in results:
+        r['is_best'] = (r['optimization'].id == best_id)
+
+    return render(request, 'palet_app/benchmark_result.html', {
+        'results': results,
+        'container': palet_cfg_dims,
+        'benchmark_group_id': group_id,
+    })
+
+
+def benchmark_select(request, optimization_id):
+    """Benchmark sonuçlarından birini seç → mevcut analysis sayfasına yönlendir."""
+    group_id = request.session.get('benchmark_group_id')
+    try:
+        opt = Optimization.objects.get(id=optimization_id, benchmark_group_id=group_id)
+    except Optimization.DoesNotExist:
+        return redirect('palet_app:home')
+
+    request.session['optimization_id'] = opt.id
+    request.session['algoritma'] = opt.algoritma
+    request.session.modified = True
+    return redirect('palet_app:analysis')
+
+
+def _algoritma_label(key):
+    return {
+        'greedy': 'Greedy',
+        'genetic': 'Genetik Algoritma',
+        'differential_evolution': 'Differential Evolution',
+    }.get(key, key)
+
+
+# ====================================================================
+# CANCEL ENDPOINTS — kullanıcı sayfadan ayrılırsa iptal
+# ====================================================================
+
+@csrf_exempt
+def cancel_optimization(request):
+    """Tekil optimizasyon iptali (processing sayfasından ayrılma)."""
+    opt_id = request.session.get('optimization_id')
+    if opt_id:
+        _cancel_opt(opt_id)
+        print(f"[IPTAL] Tekil optimization iptali istendi: {opt_id}")
+    return JsonResponse({'success': True})
+
+
+@csrf_exempt
+def cancel_benchmark(request):
+    """Benchmark grubu iptali (benchmark sayfasından ayrılma)."""
+    group_id = request.session.get('benchmark_group_id')
+    if group_id:
+        _cancel_group(group_id)
+        print(f"[IPTAL] Benchmark grup iptali istendi: {group_id}")
+    return JsonResponse({'success': True})

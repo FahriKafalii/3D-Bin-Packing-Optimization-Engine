@@ -1,0 +1,97 @@
+{% extends 'base.html' %}
+
+{% block title %}Toplu Test Sonuçları - Akıllı Palet Yerleştirme{% endblock %}
+
+{% block content %}
+<div class="container mx-auto px-4 py-8">
+    <div class="mb-6">
+        <h1 class="text-3xl font-bold text-gray-800 mb-2">
+            <i class="fas fa-trophy text-yellow-500 mr-2"></i>
+            Toplu Test Sonuçları
+        </h1>
+        <p class="text-gray-600">3 algoritma aynı veri üzerinde çalıştırıldı. Detaylı görselleştirme için birini seçin.</p>
+        {% if container %}
+        <p class="text-sm text-gray-500 mt-1">
+            Konteyner: {{ container.length }}×{{ container.width }}×{{ container.height }} cm / Max {{ container.weight }} kg
+        </p>
+        {% endif %}
+    </div>
+
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6">
+        {% for r in results %}
+        <div class="bg-white shadow-lg rounded-xl p-6 border-2 {% if r.is_best %}border-green-500 ring-2 ring-green-200{% else %}border-gray-200{% endif %} relative">
+            {% if r.is_best %}
+            <div class="absolute -top-3 -right-3 bg-green-500 text-white text-xs font-bold px-3 py-1 rounded-full shadow">
+                <i class="fas fa-crown mr-1"></i>EN İYİ
+            </div>
+            {% endif %}
+
+            <div class="flex items-center mb-4">
+                {% if r.algoritma == 'genetic' %}
+                    <div class="bg-blue-100 rounded-full p-3 mr-3"><i class="fas fa-dna text-blue-600 text-2xl"></i></div>
+                {% elif r.algoritma == 'differential_evolution' %}
+                    <div class="bg-purple-100 rounded-full p-3 mr-3"><i class="fas fa-atom text-purple-600 text-2xl"></i></div>
+                {% else %}
+                    <div class="bg-amber-100 rounded-full p-3 mr-3"><i class="fas fa-bolt text-amber-600 text-2xl"></i></div>
+                {% endif %}
+                <div>
+                    <h3 class="font-bold text-lg text-gray-800">{{ r.algoritma_label }}</h3>
+                    <span class="text-xs {% if r.completed %}text-green-600{% else %}text-red-600{% endif %}">
+                        {% if r.completed %}Tamamlandı{% else %}Hatalı / tamamlanmadı{% endif %}
+                    </span>
+                </div>
+            </div>
+
+            <dl class="space-y-3 text-sm">
+                <div class="flex justify-between border-b pb-2">
+                    <dt class="text-gray-600">Toplam Palet</dt>
+                    <dd class="font-bold text-gray-900">{{ r.toplam_palet }}</dd>
+                </div>
+                <div class="flex justify-between border-b pb-2">
+                    <dt class="text-gray-600">Single / Mix</dt>
+                    <dd class="font-semibold text-gray-900">{{ r.single_palet }} / {{ r.mix_palet }}</dd>
+                </div>
+                <div class="flex justify-between border-b pb-2">
+                    <dt class="text-gray-600">Ort. Doluluk</dt>
+                    <dd class="font-bold text-blue-600">%{{ r.avg_fill }}</dd>
+                </div>
+                <div class="flex justify-between border-b pb-2">
+                    <dt class="text-gray-600">Süre</dt>
+                    <dd class="font-semibold text-gray-900">
+                        {% if r.elapsed is not None %}{{ r.elapsed }} sn{% else %}—{% endif %}
+                    </dd>
+                </div>
+                <div class="flex justify-between">
+                    <dt class="text-gray-600">Yerleştirilemeyen</dt>
+                    <dd class="font-semibold {% if r.yerlesmemis_sayi > 0 %}text-red-600{% else %}text-gray-900{% endif %}">
+                        {{ r.yerlesmemis_sayi }}
+                    </dd>
+                </div>
+            </dl>
+
+            <div class="mt-5">
+                {% if r.completed and r.toplam_palet > 0 %}
+                <a href="{% url 'palet_app:benchmark_select' r.optimization.id %}"
+                   class="block w-full text-center bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 text-white font-bold py-3 rounded-lg transition-all transform hover:scale-105 shadow">
+                    <i class="fas fa-eye mr-2"></i>Bu Sonucu Seç ve Görselleştir
+                </a>
+                {% else %}
+                <button disabled class="block w-full text-center bg-gray-300 text-gray-500 font-bold py-3 rounded-lg cursor-not-allowed">
+                    <i class="fas fa-ban mr-2"></i>Uygun değil
+                </button>
+                {% endif %}
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+
+    <div class="flex justify-center space-x-4">
+        <a href="{% url 'palet_app:urun_listesi' %}" class="bg-gray-500 hover:bg-gray-600 text-white font-bold py-3 px-8 rounded-xl transition-colors">
+            <i class="fas fa-arrow-left mr-2"></i>Ürün Listesine Dön
+        </a>
+        <a href="{% url 'palet_app:home' %}" class="bg-white border-2 border-gray-300 hover:border-gray-400 text-gray-700 font-bold py-3 px-8 rounded-xl transition-colors">
+            <i class="fas fa-home mr-2"></i>Ana Sayfa
+        </a>
+    </div>
+</div>
+{% endblock %}

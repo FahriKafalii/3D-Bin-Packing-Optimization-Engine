@@ -1,0 +1,241 @@
+{% extends 'base.html' %}
+
+{% block title %}Toplu Test İşleniyor - Akıllı Palet Yerleştirme{% endblock %}
+
+{% block content %}
+<div class="py-8 max-w-5xl mx-auto">
+    <div class="text-center mb-8">
+        <h2 class="text-3xl font-bold text-gray-800 mb-2">
+            <i class="fas fa-layer-group text-blue-600 mr-2"></i>
+            Toplu Test Çalışıyor
+        </h2>
+        <p class="text-gray-600">3 algoritma aynı veri üzerinde paralel çalışıyor. Tamamlandığında karşılaştırma sayfasına yönlendirileceksiniz.</p>
+    </div>
+
+    <div id="algoCards" class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+        {% for opt in optimizations %}
+        <div class="algo-card bg-white shadow-lg rounded-xl p-5 border-2 border-gray-200" data-opt-id="{{ opt.id }}" data-algo="{{ opt.algoritma }}">
+            <div class="flex items-center mb-3">
+                <div class="rounded-full p-2 mr-3 algo-icon">
+                    {% if opt.algoritma == 'genetic' %}
+                        <i class="fas fa-dna text-blue-600 text-xl"></i>
+                    {% elif opt.algoritma == 'differential_evolution' %}
+                        <i class="fas fa-atom text-purple-600 text-xl"></i>
+                    {% else %}
+                        <i class="fas fa-bolt text-amber-600 text-xl"></i>
+                    {% endif %}
+                </div>
+                <div>
+                    <h4 class="font-bold text-gray-800">
+                        {% if opt.algoritma == 'genetic' %}Genetik Algoritma
+                        {% elif opt.algoritma == 'differential_evolution' %}Differential Evolution
+                        {% else %}Greedy{% endif %}
+                    </h4>
+                    <span class="algo-status text-xs text-gray-500">Hazırlanıyor...</span>
+                </div>
+            </div>
+
+            <div class="bg-gray-200 rounded-full h-3 overflow-hidden mb-2">
+                <div class="algo-bar bg-blue-600 h-3 w-0"></div>
+            </div>
+            <p class="algo-percent text-right text-xs text-gray-500 mb-2">0%</p>
+
+            <div class="algo-msg text-xs text-gray-600 bg-gray-50 rounded p-2 h-16 overflow-hidden">—</div>
+        </div>
+        {% endfor %}
+    </div>
+
+    <div class="bg-gray-900 text-white font-mono text-sm p-4 rounded-xl shadow-inner h-48 overflow-auto">
+        <div id="logContainer" class="whitespace-pre-line"></div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+$(document).ready(function() {
+    const logContainer = $('#logContainer');
+    let allDone = false;
+    let requestInProgress = false;
+    let timeoutId;
+
+    // Her algoritmanın rengi, etiketi, ve konsola son hangi index'e kadar yazıldığı
+    const ALGO_META = {
+        greedy:                 { label: 'Greedy',  cls: 'text-amber-300'  },
+        genetic:                { label: 'Genetik', cls: 'text-sky-300'    },
+        differential_evolution: { label: 'DE',      cls: 'text-fuchsia-300'},
+    };
+    const seenCount = {};      // opt_id -> son konsola yazılan mesaj index'i
+    const completedLogged = {};// opt_id -> true/false (tamamlandı mesajı bir kez bassın)
+    const errorLogged = {};    // opt_id -> true/false
+
+    // Her kart için yumuşak bar state'i
+    // displayed: şu an ekranda görünen yüzde (float)
+    // target:    backend'den gelen hedef yüzde
+    // finalPush: tamamlandı mesajı geldikten sonra 100'e hızlı sıçrama izni
+    const barState = {};       // opt_id -> { displayed, target, finalPush }
+    function ensureState(id) {
+        if (!barState[id]) barState[id] = { displayed: 0, target: 0, finalPush: false };
+        return barState[id];
+    }
+
+    // rAF döngüsü: her frame her kartın displayed'ını target'a doğru küçük adımlarla yaklaştırır
+    function tickBars() {
+        Object.keys(barState).forEach(id => {
+            const st = barState[id];
+            if (st.displayed >= st.target) return;
+            const diff = st.target - st.displayed;
+            // Tamamlandıysa 100'e hızlı, değilse yumuşak (küçük adım)
+            const step = st.finalPush
+                ? Math.max(0.8, diff * 0.15)   // bitince bar ~1 sn içinde 100'e
+                : Math.max(0.08, diff * 0.04); // normalde frame başına ~diff*4%
+            st.displayed = Math.min(st.target, st.displayed + step);
+            const card = $(`.algo-card[data-opt-id="${id}"]`);
+            if (card.length) {
+                const pct = st.displayed.toFixed(1);
+                card.find('.algo-bar').css('width', `${pct}%`);
+                card.find('.algo-percent').text(`${Math.round(st.displayed)}%`);
+            }
+        });
+        requestAnimationFrame(tickBars);
+    }
+    requestAnimationFrame(tickBars);
+
+    function ts() { return new Date().toLocaleTimeString(); }
+
+    function rawLog(html) {
+        logContainer.append(html);
+        const el = document.getElementById('logContainer');
+        el.scrollTop = el.scrollHeight;
+    }
+
+    function sysLog(msg, isError=false) {
+        const cls = isError ? 'text-red-400' : 'text-gray-300';
+        rawLog($(`<div class="${cls}">[${ts()}] ${msg}</div>`));
+    }
+
+    function algoLog(optId, algoKey, message, tone='normal') {
+        const meta = ALGO_META[algoKey] || { label: algoKey, cls: 'text-gray-200' };
+        // Etiketi sabit genişlikte hizala (9 karakter)
+        const tag = `[${meta.label}]`.padEnd(10, '\u00A0');
+        let prefix = '';
+        if (tone === 'done')  prefix = '<span class="text-green-400 font-bold">✓ </span>';
+        if (tone === 'error') prefix = '<span class="text-red-400 font-bold">✗ </span>';
+        const line = $(
+            `<div><span class="text-gray-500">[${ts()}]</span> ` +
+            `<span class="${meta.cls} font-semibold">${tag}</span> ` +
+            `${prefix}<span class="${tone === 'error' ? 'text-red-300' : (tone === 'done' ? 'text-green-300' : 'text-gray-200')}">${message}</span></div>`
+        );
+        rawLog(line);
+    }
+
+    function updateCards(items) {
+        items.forEach(item => {
+            const card = $(`.algo-card[data-opt-id="${item.id}"]`);
+            if (!card.length) return;
+
+            // Yumuşak bar için hedefi güncelle — rAF döngüsü 1-1 yaklaşacak
+            const st = ensureState(item.id);
+            // Hedef yalnız artabilir (geri gitme)
+            if (item.percent > st.target) st.target = item.percent;
+            if (item.completed || item.error) {
+                st.target = 100;
+                st.finalPush = true;
+            }
+
+            if (item.error) {
+                card.find('.algo-status').text('Hata').removeClass().addClass('algo-status text-xs text-red-600 font-semibold');
+                card.find('.algo-bar').removeClass('bg-blue-600').addClass('bg-red-500');
+                card.removeClass('border-gray-200').addClass('border-red-400');
+            } else if (item.completed) {
+                card.find('.algo-status').text('Tamamlandı').removeClass().addClass('algo-status text-xs text-green-600 font-semibold');
+                card.find('.algo-bar').removeClass('bg-blue-600').addClass('bg-green-500');
+                card.removeClass('border-gray-200').addClass('border-green-400');
+            } else {
+                card.find('.algo-status').text(`Adım ${item.current_step}/${item.total_steps}`);
+            }
+
+            if (item.last_message) {
+                card.find('.algo-msg').text(item.last_message);
+            }
+
+            // Konsola yeni mesajları yaz
+            const msgs = item.messages || [];
+            const seen = seenCount[item.id] || 0;
+            if (msgs.length > seen) {
+                for (let i = seen; i < msgs.length; i++) {
+                    algoLog(item.id, item.algoritma, msgs[i]);
+                }
+                seenCount[item.id] = msgs.length;
+            }
+
+            // Tamamlanma / hata bir kez bassın
+            if (item.completed && !completedLogged[item.id]) {
+                completedLogged[item.id] = true;
+                const sure = (item.elapsed !== null && item.elapsed !== undefined) ? ` (${item.elapsed} sn)` : '';
+                algoLog(item.id, item.algoritma, `Tamamlandı${sure}`, 'done');
+            }
+            if (item.error && !errorLogged[item.id]) {
+                errorLogged[item.id] = true;
+                algoLog(item.id, item.algoritma, 'Hata oluştu, algoritma durduruldu', 'error');
+            }
+        });
+    }
+
+    function checkStatus() {
+        if (allDone || requestInProgress) return;
+        requestInProgress = true;
+
+        $.ajax({
+            url: '{% url "palet_app:benchmark_status" %}',
+            type: 'GET',
+            dataType: 'json',
+            timeout: 10000,
+            success: function(resp) {
+                requestInProgress = false;
+                if (!resp.success) {
+                    sysLog('Hata: ' + (resp.error || 'bilinmiyor'), true);
+                    return;
+                }
+
+                updateCards(resp.items);
+
+                if (resp.all_done) {
+                    allDone = true;
+                    sysLog('Tüm algoritmalar tamamlandı. Sonuç sayfasına yönlendiriliyor...');
+                    setTimeout(() => { window.location.href = resp.result_url; }, 1400);
+                } else {
+                    timeoutId = setTimeout(checkStatus, 2000);
+                }
+            },
+            error: function() {
+                requestInProgress = false;
+                sysLog('Bağlantı hatası, yeniden denenecek...', true);
+                timeoutId = setTimeout(checkStatus, 4000);
+            }
+        });
+    }
+
+    // Sayfadan ayrılınca backend'e iptal sinyali gönder (sendBeacon: tarayıcı
+    // sayfayı kapatsa bile request gider).
+    function sendCancel() {
+        if (allDone) return;
+        try {
+            const url = '{% url "palet_app:cancel_benchmark" %}';
+            if (navigator.sendBeacon) {
+                navigator.sendBeacon(url, new Blob([], {type: 'text/plain'}));
+            } else {
+                $.ajax({ url: url, type: 'POST', async: false });
+            }
+        } catch (_e) {}
+    }
+    $(window).on('beforeunload pagehide', function() {
+        if (timeoutId) clearTimeout(timeoutId);
+        sendCancel();
+    });
+
+    sysLog('Toplu test başlatıldı. 3 algoritma paralel çalışıyor...');
+    setTimeout(checkStatus, 800);
+});
+</script>
+{% endblock %}

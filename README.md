@@ -60,7 +60,7 @@ The system operates through a **two-stage optimization pipeline**:
 - **Realistic Packing Constraints**: Void penalties, layer snapping, edge bias, cavity detection
 - **Single + Mixed Pallet Strategy**: Optimized separation of high-efficiency groups
 - **Web Interface (Django)**: Product/container management, 3D visualizations, results analysis
-- **Benchmark Comparison Tool (Streamlit)**: Compare GA, DE, and Greedy on same input
+- **Built-in Benchmark Page**: Compare GA, DE, and Greedy on the same input in the web UI
 - **Flexible Algorithm Selection**: Choose best-fit method for your requirements
 
 ## 🚀 Optimization Pipeline
@@ -137,12 +137,12 @@ The optimization workflow processes items through a structured pipeline:
 
 ## 🔬 Benchmark Tool
 
-A **Streamlit-based benchmark interface** enables side-by-side algorithm comparison:
+The web UI includes a built-in **"Toplu Test"** (bulk test) page that runs all three algorithms in parallel on the same input:
 
 **Functionality:**
-- Load same JSON input into all three algorithms
-- Run GA, DE, and Greedy simultaneously
-- Compare metrics in real-time
+- Load JSON input once; benchmark runs GA, DE, and Greedy concurrently
+- Live progress panels for each algorithm
+- Side-by-side comparison after all three finish; pick one to visualize in the standard analysis page
 
 **Metrics Compared:**
 - **Runtime**: Execution time per algorithm (seconds)
@@ -372,8 +372,9 @@ Recommended validation workflow:
 # Run a sample optimization
 python main.py data/samples/0114.json
 
-# Compare GA vs DE vs Greedy in Streamlit
-streamlit run streamlit_benchmark.py
+# Compare GA vs DE vs Greedy in the web UI
+python manage.py runserver
+# → upload JSON, then click "Toplu Test (3 Algoritma)" on the product list page
 ```
 
 **Gravity Constraint:**
